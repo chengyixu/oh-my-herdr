@@ -1,0 +1,47 @@
+{
+  "name": "ohmyherdr",
+  "version": "0.8.5",
+  "description": "Native agent profiles and shared coding spaces for Codex, Pi, and Claude Code.",
+  "keywords": [
+    "coding-agents",
+    "codex",
+    "claude-code",
+    "pi",
+    "terminal",
+    "agent-runtime"
+  ],
+  "license": "Apache-2.0",
+  "author": "chengyixu",
+  "homepage": "https://github.com/minervacap2022/oh-my-herdr#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/minervacap2022/oh-my-herdr.git"
+  },
+  "bugs": {
+    "url": "https://github.com/minervacap2022/oh-my-herdr/issues"
+  },
+  "bin": {
+    "ohmyherdr": "bin/ohmyherdr.js"
+  },
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "bin",
+    "scripts",
+    "README.md"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/install.js",
+    "test": "node --test test/*.test.js"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

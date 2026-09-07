@@ -43,7 +43,19 @@ intact.**
 ## install
 
 The first production release supports Apple Silicon macOS. Install the product
-binary separately from any stable Herdr binary:
+binary separately from any stable Herdr binary.
+
+### npm
+
+```bash
+npm install --global ohmyherdr
+ohmyherdr
+```
+
+The NPM package installs the matching checksum-verified native binary and does
+not share a server, sockets, configuration, or executable with stable Herdr.
+
+### direct binary
 
 ```bash
 install_dir="${OHMYHERDR_INSTALL_DIR:-$HOME/.local/bin}"
