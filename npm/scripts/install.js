@@ -4,7 +4,7 @@ const https = require("node:https");
 const path = require("node:path");
 
 const packageJson = require("../package.json");
-const releaseBaseUrl = "https://github.com/minervacap2022/oh-my-herdr/releases/download";
+const releaseBaseUrl = "https://github.com/chengyixu/oh-my-herdr/releases/download";
 const manifestUrl = `${releaseBaseUrl}/ohmyherdr-v${packageJson.version}/ohmyherdr-latest.json`;
 const nativePath = path.join(__dirname, "..", "bin", "ohmyherdr-native");
 

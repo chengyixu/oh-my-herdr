@@ -25,7 +25,7 @@ use serde::{Deserialize, Deserializer};
 const STABLE_UPDATE_MANIFEST_URL: &str = "https://herdr.dev/latest.json";
 const PREVIEW_UPDATE_MANIFEST_URL: &str = "https://herdr.dev/preview.json";
 const OHMYHERDR_UPDATE_MANIFEST_URL: &str =
-    "https://github.com/minervacap2022/oh-my-herdr/releases/latest/download/ohmyherdr-latest.json";
+    "https://github.com/chengyixu/oh-my-herdr/releases/latest/download/ohmyherdr-latest.json";
 const HOMEBREW_FORMULA_API_URL: &str = "https://formulae.brew.sh/api/formula/herdr.json";
 const HERDR_UPDATE_COMMAND: &str = "herdr update";
 const OHMYHERDR_UPDATE_COMMAND: &str = "ohmyherdr update";
@@ -2831,7 +2831,7 @@ mod tests {
         );
         assert_eq!(
             stable_update_manifest_url_for_product(true),
-            "https://github.com/minervacap2022/oh-my-herdr/releases/latest/download/ohmyherdr-latest.json"
+            "https://github.com/chengyixu/oh-my-herdr/releases/latest/download/ohmyherdr-latest.json"
         );
     }
 

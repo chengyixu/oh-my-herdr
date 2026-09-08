@@ -38,5 +38,5 @@ new product server when the release supports live handoff.
 ## Platform support
 
 The first NPM release supports Apple Silicon macOS (`darwin` / `arm64`) only.
-See the [GitHub releases](https://github.com/minervacap2022/oh-my-herdr/releases)
+See the [GitHub releases](https://github.com/chengyixu/oh-my-herdr/releases)
 for the native artifact and release history.

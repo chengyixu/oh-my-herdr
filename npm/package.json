@@ -12,13 +12,13 @@
   ],
   "license": "Apache-2.0",
   "author": "chengyixu",
-  "homepage": "https://github.com/minervacap2022/oh-my-herdr#readme",
+  "homepage": "https://github.com/chengyixu/oh-my-herdr#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/minervacap2022/oh-my-herdr.git"
+    "url": "git+https://github.com/chengyixu/oh-my-herdr.git"
   },
   "bugs": {
-    "url": "https://github.com/minervacap2022/oh-my-herdr/issues"
+    "url": "https://github.com/chengyixu/oh-my-herdr/issues"
   },
   "bin": {
     "ohmyherdr": "bin/ohmyherdr.js"

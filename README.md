@@ -9,13 +9,13 @@
 </p>
 
 <p align="center">
-  <a href="#install">install</a> · <a href="#native-agent-profiles">agent profiles</a> · <a href="https://github.com/minervacap2022/oh-my-herdr/releases">releases</a>
+  <a href="#install">install</a> · <a href="#native-agent-profiles">agent profiles</a> · <a href="https://github.com/chengyixu/oh-my-herdr/releases">releases</a>
 </p>
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-666666?labelColor=333333" alt="Apache 2.0 license" /></a>
-  <a href="https://github.com/minervacap2022/oh-my-herdr/releases/latest"><img src="https://img.shields.io/github/v/release/minervacap2022/oh-my-herdr?label=release&labelColor=333333&color=666666" alt="latest release" /></a>
-  <a href="https://github.com/minervacap2022/oh-my-herdr/stargazers"><img src="https://img.shields.io/github/stars/minervacap2022/oh-my-herdr?labelColor=333333&color=666666&logo=github" alt="GitHub stars" /></a>
+  <a href="https://github.com/chengyixu/oh-my-herdr/releases/latest"><img src="https://img.shields.io/github/v/release/chengyixu/oh-my-herdr?label=release&labelColor=333333&color=666666" alt="latest release" /></a>
+  <a href="https://github.com/chengyixu/oh-my-herdr/stargazers"><img src="https://img.shields.io/github/stars/chengyixu/oh-my-herdr?labelColor=333333&color=666666&logo=github" alt="GitHub stars" /></a>
 </p>
 
 ---
@@ -61,7 +61,7 @@ not share a server, sockets, configuration, or executable with stable Herdr.
 install_dir="${OHMYHERDR_INSTALL_DIR:-$HOME/.local/bin}"
 mkdir -p "$install_dir"
 curl -fsSL \
-  https://github.com/minervacap2022/oh-my-herdr/releases/latest/download/ohmyherdr-macos-aarch64 \
+  https://github.com/chengyixu/oh-my-herdr/releases/latest/download/ohmyherdr-macos-aarch64 \
   -o "$install_dir/ohmyherdr"
 chmod +x "$install_dir/ohmyherdr"
 ```
@@ -98,7 +98,7 @@ saved settings and owned instruction document; it does not delete live panes.
 ## development
 
 ```bash
-git clone https://github.com/minervacap2022/oh-my-herdr
+git clone https://github.com/chengyixu/oh-my-herdr
 cd oh-my-herdr
 cargo build --release
 
