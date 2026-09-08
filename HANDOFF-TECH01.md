@@ -265,7 +265,7 @@ The source now makes the compile-time OhMyHerdr build use only this product
 endpoint for both direct update checks and remote binary lookup:
 
 ```text
-https://github.com/minervacap2022/oh-my-herdr/releases/latest/download/ohmyherdr-latest.json
+https://github.com/chengyixu/oh-my-herdr/releases/latest/download/ohmyherdr-latest.json
 ```
 
 It never falls back to `https://herdr.dev/latest.json`, forces the product to
@@ -275,13 +275,10 @@ guidance. The manifest-selection test covers the stable-vs-product separation
 under both ordinary and `OHMYHERDR_BUILD=1` compilation. The remote installer
 uses the same selector.
 
-There is one real blocker to a downloadable OTA: `minervacap2022/oh-my-herdr`
-currently has **no GitHub Release** and therefore no
-`ohmyherdr-latest.json` asset. An anonymous request to the exact product URL
-returned HTTP 404 on 2026-09-02. A release publisher must publish that manifest
-with platform assets and SHA-256 values at the endpoint (and make that endpoint
-reachable to intended product users). Until then the code is isolated and safe
-from Herdr, but a real network update cannot be completed or end-to-end tested.
+The downloadable OTA is published through the canonical `chengyixu/oh-my-herdr`
+GitHub Release. The `ohmyherdr-latest.json` manifest and macOS Apple Silicon
+binary are available at the product endpoint, with SHA-256 verification enforced
+by the installer. The npm wrapper remains a separate distribution path.
 
 ### Follow-up validation
 
@@ -395,7 +392,7 @@ Current uncommitted binary diff SHA-256:
 ## 2026-09-03 production OTA release
 
 The user explicitly approved publishing this product. The product repository is
-now public at `https://github.com/minervacap2022/oh-my-herdr`; stable Herdr's
+now public at `https://github.com/chengyixu/oh-my-herdr`; stable Herdr's
 repository, binary, server, socket, and update endpoint were not changed.
 
 The first product OTA is version `0.8.3`. The release workflow is deliberately
@@ -432,12 +429,12 @@ their product-native installation paths are released and verified.
 The public production release is now live:
 
 ```text
-release URL  https://github.com/minervacap2022/oh-my-herdr/releases/tag/ohmyherdr-v0.8.3
+release URL  https://github.com/chengyixu/oh-my-herdr/releases/tag/ohmyherdr-v0.8.3
 tag          ohmyherdr-v0.8.3
 target       e48325551b903382ab6760dc4fcf17b50794ddb4
 artifact     ohmyherdr-macos-aarch64
 SHA-256      11e8fcd289f679a7cb0bd9d8bb74716ccbc77d393f1aa4e072757f0c15f4ac5b
-manifest     https://github.com/minervacap2022/oh-my-herdr/releases/latest/download/ohmyherdr-latest.json
+manifest     https://github.com/chengyixu/oh-my-herdr/releases/latest/download/ohmyherdr-latest.json
 ```
 
 The manifest was fetched anonymously from its native endpoint, parsed as JSON,
@@ -534,8 +531,8 @@ OhMyHerdr `0.8.5` is public and its native update manifest and binary were
 downloaded anonymously, checksum-verified, and version-checked:
 
 ```text
-release      https://github.com/minervacap2022/oh-my-herdr/releases/tag/ohmyherdr-v0.8.5
-manifest     https://github.com/minervacap2022/oh-my-herdr/releases/latest/download/ohmyherdr-latest.json
+release      https://github.com/chengyixu/oh-my-herdr/releases/tag/ohmyherdr-v0.8.5
+manifest     https://github.com/chengyixu/oh-my-herdr/releases/latest/download/ohmyherdr-latest.json
 artifact     ohmyherdr-macos-aarch64
 asset SHA    9021f7757e50b477043478e44700ba775759c289673a27d1bf42a29b5b36eed0
 identity     ohmyherdr 0.8.5-ohmyherdr.0.8.5
