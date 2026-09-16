@@ -38,9 +38,9 @@ pub(crate) struct AgentPanelEntry {
     pub last_agent_state_change_seq: Option<u64>,
     pub state_labels: std::collections::HashMap<String, String>,
     pub tokens: std::collections::HashMap<String, String>,
-    /// Set for a persistent profile card that has no live pane yet (or is a
-    /// deliberate replica affordance). The existing pane fields remain valid
-    /// so filtering, layout, and token rendering stay on one path.
+    /// Set for a persistent profile row in the profile-only Agents roster.
+    /// The pane fields remain populated with inert values so the common row
+    /// geometry and click paths can still recognize a profile entry.
     pub saved_profile_role: Option<String>,
     pub profile_native_cwd: Option<String>,
 }
@@ -88,6 +88,7 @@ fn agent_panel_sort_label(sort: AgentPanelSort) -> &'static str {
     match sort {
         AgentPanelSort::Spaces => "grouped",
         AgentPanelSort::Priority => "priority",
+        AgentPanelSort::Agents => "agents",
     }
 }
 
@@ -122,6 +123,9 @@ fn agent_panel_header_label_rect(area: Rect, label: &str) -> Rect {
 }
 
 fn active_agent_view_label(app: &AppState) -> Option<&str> {
+    if app.agent_panel_sort == AgentPanelSort::Agents {
+        return None;
+    }
     app.agent_view_override
         .as_ref()
         .map(|view| view.label.as_deref().unwrap_or("filtered"))
@@ -146,26 +150,17 @@ fn agent_panel_entries_with_runtimes(
     app: &AppState,
     terminal_runtimes: Option<&TerminalRuntimeRegistry>,
 ) -> Vec<AgentPanelEntry> {
+    if app.agent_panel_sort == AgentPanelSort::Agents {
+        return profile_agent_panel_entries(app);
+    }
+
     let mut entries = collect_agent_panel_entries_with_runtimes(app, terminal_runtimes);
     crate::app::agent_view::apply_agent_view(app, &mut entries);
     entries
 }
 
-fn collect_agent_panel_entries_with_runtimes(
-    app: &AppState,
-    terminal_runtimes: Option<&TerminalRuntimeRegistry>,
-) -> Vec<AgentPanelEntry> {
-    let empty_runtimes;
-    let terminal_runtimes = match terminal_runtimes {
-        Some(terminal_runtimes) => terminal_runtimes,
-        None => {
-            empty_runtimes = TerminalRuntimeRegistry::new();
-            &empty_runtimes
-        }
-    };
-
-    let profile_entries = app
-        .saved_agent_profiles
+fn profile_agent_panel_entries(app: &AppState) -> Vec<AgentPanelEntry> {
+    app.saved_agent_profiles
         .iter()
         .map(|profile| AgentPanelEntry {
             ws_idx: app.active.unwrap_or_default(),
@@ -189,10 +184,23 @@ fn collect_agent_panel_entries_with_runtimes(
             saved_profile_role: Some(profile.role.clone()),
             profile_native_cwd: Some(profile.native_cwd.clone()),
         })
-        .collect::<Vec<_>>();
+        .collect()
+}
 
-    let live_entries = app
-        .workspaces
+fn collect_agent_panel_entries_with_runtimes(
+    app: &AppState,
+    terminal_runtimes: Option<&TerminalRuntimeRegistry>,
+) -> Vec<AgentPanelEntry> {
+    let empty_runtimes;
+    let terminal_runtimes = match terminal_runtimes {
+        Some(terminal_runtimes) => terminal_runtimes,
+        None => {
+            empty_runtimes = TerminalRuntimeRegistry::new();
+            &empty_runtimes
+        }
+    };
+
+    app.workspaces
         .iter()
         .enumerate()
         .flat_map(|(ws_idx, ws)| {
@@ -228,38 +236,7 @@ fn collect_agent_panel_entries_with_runtimes(
                     }
                 })
         })
-        .collect::<Vec<_>>();
-
-    let mut entries = Vec::with_capacity(profile_entries.len() + live_entries.len());
-    for profile in profile_entries {
-        let role = profile.saved_profile_role.clone();
-        entries.push(profile);
-        entries.extend(
-            live_entries
-                .iter()
-                .filter(|entry| {
-                    role.as_deref()
-                        .is_some_and(|role| live_entry_matches_profile(entry, role))
-                })
-                .cloned(),
-        );
-    }
-    entries.extend(live_entries.into_iter().filter(|entry| {
-        !app.saved_agent_profiles
-            .iter()
-            .any(|profile| live_entry_matches_profile(entry, &profile.role))
-    }));
-    entries
-}
-
-fn live_entry_matches_profile(entry: &AgentPanelEntry, role: &str) -> bool {
-    let Some(label) = entry.agent_label.as_deref() else {
-        return false;
-    };
-    label == role
-        || label
-            .strip_prefix(role)
-            .is_some_and(|suffix| suffix.starts_with("-replica-"))
+        .collect()
 }
 
 /// Return the sidebar entry occupying a screen row. Mouse handling uses this
@@ -659,16 +636,10 @@ fn resolved_agent_rows(app: &AppState, entry: &AgentPanelEntry) -> Vec<Vec<Resol
         entry.saved_profile_role.as_ref(),
         entry.profile_native_cwd.as_ref(),
     ) {
-        return vec![
-            vec![ResolvedToken::new(
-                ResolvedTokenKind::Workspace(role.clone()),
-                crate::config::SidebarTokenStyle::default(),
-            )],
-            vec![ResolvedToken::new(
-                ResolvedTokenKind::Custom(native_cwd.clone()),
-                crate::config::SidebarTokenStyle::default(),
-            )],
-        ];
+        return vec![vec![ResolvedToken::new(
+            ResolvedTokenKind::Workspace(format!("{role} ({native_cwd})")),
+            crate::config::SidebarTokenStyle::default(),
+        )]];
     }
     let label = entry
         .state_labels
@@ -2290,7 +2261,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
     }
 
     #[test]
-    fn saved_profiles_are_visible_before_live_panes_and_keep_spawn_targets() {
+    fn agents_roster_lists_saved_profiles_once_without_live_sessions() {
         let mut app = crate::app::state::AppState::test_new();
         app.saved_agent_profiles = vec![crate::app::state::SavedAgentProfile {
             role: "reviewer".into(),
@@ -2306,26 +2277,36 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             .clone();
         app.terminals.get_mut(&terminal_id).unwrap().detected_agent = Some(Agent::Pi);
 
-        let entries = agent_panel_entries(&app);
-        assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].saved_profile_role.as_deref(), Some("reviewer"));
-        assert_eq!(entries[0].primary_label, "reviewer");
+        let sessions = agent_panel_entries(&app);
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].saved_profile_role, None);
+
+        app.agent_panel_sort = crate::app::state::AgentPanelSort::Agents;
+        let roster = agent_panel_entries(&app);
+        assert_eq!(roster.len(), 1);
+        assert_eq!(roster[0].saved_profile_role.as_deref(), Some("reviewer"));
         assert_eq!(
-            entries[0].profile_native_cwd.as_deref(),
-            Some("/tmp/reviewer")
-        );
-        assert_eq!(
-            resolved_agent_rows(&app, &entries[0])
+            resolved_agent_rows(&app, &roster[0])
                 .iter()
                 .flatten()
                 .map(|token| &token.kind)
                 .collect::<Vec<_>>(),
-            vec![
-                &ResolvedTokenKind::Workspace("reviewer".into()),
-                &ResolvedTokenKind::Custom("/tmp/reviewer".into()),
-            ]
+            vec![&ResolvedTokenKind::Workspace(
+                "reviewer (/tmp/reviewer)".into()
+            )]
         );
-        assert_eq!(entries[1].saved_profile_role, None);
+
+        let area = Rect::new(0, 0, 26, 20);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
+            .unwrap();
+        let (_, agent_area) = expanded_sidebar_sections(area, app.sidebar_section_split);
+        let body = agent_panel_body_rect(agent_area, false);
+        assert_eq!(
+            row_text(terminal.backend().buffer(), body.y, body.width),
+            " reviewer (/tmp/reviewer)"
+        );
     }
 
     #[test]

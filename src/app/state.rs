@@ -1081,6 +1081,7 @@ pub enum AgentPanelSort {
     #[default]
     Spaces,
     Priority,
+    Agents,
 }
 
 // ---------------------------------------------------------------------------

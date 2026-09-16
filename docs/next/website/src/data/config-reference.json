@@ -1021,10 +1021,11 @@
           "key": "ui.agent_panel_sort",
           "type": "enum",
           "default": "\"spaces\"",
-          "description": "Agent sidebar ordering. Saved values are \"spaces\" or \"priority\"; \"workspaces\" is accepted as an alias for \"spaces\".",
+          "description": "Agent sidebar view. \"spaces\" groups live sessions by space, \"priority\" orders live sessions by attention, and \"agents\" lists saved profiles only as name plus native directory. \"workspaces\" is accepted as an alias for \"spaces\".",
           "values": [
             "spaces",
-            "priority"
+            "priority",
+            "agents"
           ]
         },
         {

@@ -264,6 +264,7 @@ fn agent_panel_sort_from_config(
     match sort {
         crate::config::AgentPanelSortConfig::Spaces => state::AgentPanelSort::Spaces,
         crate::config::AgentPanelSortConfig::Priority => state::AgentPanelSort::Priority,
+        crate::config::AgentPanelSortConfig::Agents => state::AgentPanelSort::Agents,
     }
 }
 
@@ -1734,6 +1735,24 @@ impl App {
         }
     }
 
+    fn profile_instruction_cursor_repeat_active(&self, key: &crate::input::TerminalKey) -> bool {
+        matches!(
+            key.code,
+            crossterm::event::KeyCode::Up
+                | crossterm::event::KeyCode::Down
+                | crossterm::event::KeyCode::Left
+                | crossterm::event::KeyCode::Right
+                | crossterm::event::KeyCode::Home
+                | crossterm::event::KeyCode::End
+        ) && self.state.mode == Mode::Settings
+            && self
+                .state
+                .settings
+                .agent_profile_form
+                .as_ref()
+                .is_some_and(state::AgentProfileForm::instructions_selected)
+    }
+
     fn execute_repeat_plan_headless(
         &mut self,
         source_id: InputSourceId,
@@ -1869,13 +1888,21 @@ impl App {
                             self.execute_repeat_plan_headless(source_id, lease_key, key, plan);
                         }
                         crossterm::event::KeyEventKind::Repeat => {
-                            let current_context = self.terminal_input_context();
-                            let plan = self.input_leases.plan_repeat(
-                                lease_key,
-                                &key,
-                                current_context.as_ref(),
-                            );
-                            self.execute_repeat_plan_headless(source_id, lease_key, key, plan);
+                            if self.profile_instruction_cursor_repeat_active(&key) {
+                                for _ in 0..key.repeat_count {
+                                    self.handle_non_terminal_key_headless(
+                                        key.clone().with_repeat_count(1),
+                                    );
+                                }
+                            } else {
+                                let current_context = self.terminal_input_context();
+                                let plan = self.input_leases.plan_repeat(
+                                    lease_key,
+                                    &key,
+                                    current_context.as_ref(),
+                                );
+                                self.execute_repeat_plan_headless(source_id, lease_key, key, plan);
+                            }
                         }
                         crossterm::event::KeyEventKind::Release => {
                             if let Some(lease) = self.input_leases.remove_forwarded(&lease_key) {
@@ -3784,6 +3811,12 @@ mod tests {
         assert_eq!(app.state.agent_panel_sort, state::AgentPanelSort::Priority);
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("agent_panel_sort = \"priority\""));
+
+        app.save_agent_panel_sort(state::AgentPanelSort::Agents);
+
+        assert_eq!(app.state.agent_panel_sort, state::AgentPanelSort::Agents);
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("agent_panel_sort = \"agents\""));
         assert!(app.state.config_diagnostic.is_none());
 
         std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
@@ -3829,6 +3862,57 @@ mod tests {
         let result =
             tokio::time::timeout(Duration::from_millis(20), recv_raw_input_or_pending(None)).await;
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn headless_profile_editor_repeats_cursor_navigation_keys() {
+        let mut app = test_app();
+        app.state.mode = Mode::Settings;
+        app.state.settings.section = state::SettingsSection::Agents;
+        app.state.settings.agent_profile_form = Some(state::AgentProfileForm {
+            existing_role: None,
+            role: "reviewer".to_string(),
+            harness: "codex".to_string(),
+            native_cwd: "/tmp".to_string(),
+            model: String::new(),
+            effort: String::new(),
+            apikey_ref: String::new(),
+            allowlist: String::new(),
+            additional_markdown: Vec::new(),
+            linked_markdown: Vec::new(),
+            instructions: "abcd\nwxyz\n1234".to_string(),
+            instructions_cursor: 0,
+            instructions_scroll: 0,
+            selected_markdown: None,
+            pending_markdown_name: None,
+            selected_field: 3,
+        });
+
+        let right = crate::input::TerminalKey::new(KeyCode::Right, KeyModifiers::empty());
+        let down = crate::input::TerminalKey::new(KeyCode::Down, KeyModifiers::empty());
+        app.route_client_events(
+            vec![
+                crate::raw_input::RawInputEvent::Key(right.clone()),
+                crate::raw_input::RawInputEvent::Key(
+                    right.with_kind(KeyEventKind::Repeat).with_repeat_count(2),
+                ),
+                crate::raw_input::RawInputEvent::Key(down.clone()),
+                crate::raw_input::RawInputEvent::Key(
+                    down.with_kind(KeyEventKind::Repeat).with_repeat_count(1),
+                ),
+            ],
+            false,
+        );
+
+        assert_eq!(
+            app.state
+                .settings
+                .agent_profile_form
+                .as_ref()
+                .unwrap()
+                .instructions_cursor,
+            "abcd\nwxyz\n123".len()
+        );
     }
 
     #[tokio::test]

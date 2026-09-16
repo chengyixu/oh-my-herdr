@@ -627,7 +627,8 @@ impl AppState {
                     if self.on_agent_panel_sort_toggle(mouse.column, mouse.row) {
                         self.agent_panel_sort = match self.agent_panel_sort {
                             AgentPanelSort::Spaces => AgentPanelSort::Priority,
-                            AgentPanelSort::Priority => AgentPanelSort::Spaces,
+                            AgentPanelSort::Priority => AgentPanelSort::Agents,
+                            AgentPanelSort::Agents => AgentPanelSort::Spaces,
                         };
                         self.agent_panel_scroll = 0;
                         self.mark_session_dirty();
@@ -1241,6 +1242,9 @@ impl AppState {
             }) => {
                 self.mode = Mode::Terminal;
                 return MobileMouseResult::Action(MouseAction::FocusPane { ws_idx, pane_id });
+            }
+            Some(crate::ui::MobileSwitcherTarget::AgentProfile(role)) => {
+                self.open_agent_profile_spawn_menu(role, mouse.column, mouse.row);
             }
             Some(crate::ui::MobileSwitcherTarget::Menu(action_idx)) => {
                 let actions = global_menu_actions(self);

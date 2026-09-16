@@ -33,7 +33,7 @@ pub(crate) struct MobileSwitcherAreas {
     pub viewport: Rect,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum MobileSwitcherTarget {
     NewWorkspace,
     Workspace(usize),
@@ -44,6 +44,7 @@ pub(crate) enum MobileSwitcherTarget {
         tab_idx: usize,
         pane_id: PaneId,
     },
+    AgentProfile(String),
     Menu(usize),
 }
 
@@ -156,10 +157,15 @@ pub(crate) fn mobile_switcher_target_at(
             let agents_end = cursor + agents.len() * 2;
             if doc_row >= cursor && doc_row < agents_end {
                 let idx = (doc_row - cursor) / 2;
-                return agents.get(idx).map(|entry| MobileSwitcherTarget::Agent {
-                    ws_idx: entry.ws_idx,
-                    tab_idx: entry.tab_idx,
-                    pane_id: entry.pane_id,
+                return agents.get(idx).map(|entry| {
+                    entry.saved_profile_role.clone().map_or(
+                        MobileSwitcherTarget::Agent {
+                            ws_idx: entry.ws_idx,
+                            tab_idx: entry.tab_idx,
+                            pane_id: entry.pane_id,
+                        },
+                        MobileSwitcherTarget::AgentProfile,
+                    )
                 });
             }
             cursor = agents_end;

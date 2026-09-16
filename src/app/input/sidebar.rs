@@ -608,6 +608,7 @@ mod tests {
             replicas_assigned: 0,
         }];
         state.view.sidebar_rect = Rect::new(0, 0, 26, 20);
+        state.agent_panel_sort = AgentPanelSort::Agents;
 
         let (_, panel) = crate::ui::expanded_sidebar_sections(
             state.view.sidebar_rect,
@@ -627,6 +628,7 @@ mod tests {
         app.state.active = Some(0);
         app.state.selected = 0;
         app.state.mode = Mode::Terminal;
+        app.state.agent_panel_sort = AgentPanelSort::Agents;
         app.state.saved_agent_profiles = vec![crate::app::state::SavedAgentProfile {
             role: "ccc".into(),
             native_cwd: "/tmp/ccc".into(),
@@ -981,7 +983,7 @@ mod tests {
     }
 
     #[test]
-    fn clicking_agent_panel_toggle_switches_sort() {
+    fn clicking_agent_panel_toggle_cycles_session_and_agents_views() {
         let mut app = app_for_mouse_test();
         app.state.workspaces = vec![Workspace::test_new("test")];
         app.state.active = Some(0);
@@ -993,15 +995,23 @@ mod tests {
             app.state.view.sidebar_rect,
             app.state.sidebar_section_split,
         );
-        let toggle = crate::ui::agent_panel_toggle_rect(detail_area, app.state.agent_panel_sort);
-        app.handle_mouse(mouse(
-            MouseEventKind::Down(MouseButton::Left),
-            toggle.x,
-            toggle.y,
-        ));
+        for expected in [
+            AgentPanelSort::Priority,
+            AgentPanelSort::Agents,
+            AgentPanelSort::Spaces,
+        ] {
+            let toggle =
+                crate::ui::agent_panel_toggle_rect(detail_area, app.state.agent_panel_sort);
+            app.handle_mouse(mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                toggle.x,
+                toggle.y,
+            ));
 
-        assert_eq!(app.state.agent_panel_sort, AgentPanelSort::Priority);
-        assert_eq!(app.state.agent_panel_scroll, 0);
+            assert_eq!(app.state.agent_panel_sort, expected);
+            assert_eq!(app.state.agent_panel_scroll, 0);
+            app.state.agent_panel_scroll = 3;
+        }
     }
 
     #[test]
