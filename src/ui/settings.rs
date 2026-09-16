@@ -67,10 +67,16 @@ pub(super) fn render_settings_overlay(app: &AppState, frame: &mut Frame, area: R
     .areas::<3>(stack.header);
 
     frame.render_widget(
-        Paragraph::new(Line::from(vec![Span::styled(
-            " settings",
-            Style::default().fg(p.text).add_modifier(Modifier::BOLD),
-        )])),
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                " settings",
+                Style::default().fg(p.text).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("   v{}", crate::build_info::version()),
+                Style::default().fg(p.overlay1),
+            ),
+        ])),
         header_rows[0],
     );
 
@@ -842,6 +848,16 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect()
+    }
+
+    #[test]
+    fn settings_overlay_shows_the_product_version() {
+        let mut app = AppState::test_new();
+        app.mode = Mode::Settings;
+
+        let rendered = rendered_text(&app);
+        let expected = format!("v{}", crate::build_info::version());
+        assert!(rendered.contains(&expected), "missing {expected:?}");
     }
 
     #[test]
