@@ -1,8 +1,9 @@
 use ratatui::{
+    buffer::Buffer,
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
-    text::{Line, Span},
-    widgets::{List, ListItem, ListState, Paragraph, Tabs, Wrap},
+    text::{Line, Span, Text},
+    widgets::{List, ListItem, ListState, Paragraph, Tabs, Widget, Wrap},
     Frame,
 };
 
@@ -221,7 +222,7 @@ pub(super) fn render_settings_overlay(app: &AppState, frame: &mut Frame, area: R
             .as_ref()
             .is_some_and(crate::app::state::AgentProfileForm::instructions_selected)
         {
-            " tab selects field  ↵ adds line  ctrl+↵ saves  pgup/pgdn views"
+            " tab selects field  ↑↓←→ moves cursor  ↵ adds line  ctrl+↵ saves"
         } else if app.settings.agent_profile_form.is_some() {
             " ↑↓ selects field  ←→ cycles choices  ↵ saves"
         } else {
@@ -606,21 +607,12 @@ fn render_agent_profile_form(
         Paragraph::new(document_title).style(document_style),
         rows[1],
     );
-    frame.render_widget(
-        Paragraph::new(form.active_document_content())
-            .style(document_style)
-            .wrap(Wrap { trim: false })
-            .scroll((
-                form.active_document_scroll().min(u16::MAX as usize) as u16,
-                0,
-            )),
-        rows[2],
-    );
+    render_agent_profile_document(form, frame, rows[2], document_style);
     frame.render_widget(
         Paragraph::new(if form.pending_markdown_name.is_some() {
             " enter creates document • esc cancels"
         } else if form.instructions_selected() {
-            " ←→ moves cursor • home/end line • enter line break • ctrl+enter saves"
+            " ↑↓←→ moves cursor • home/end line • enter line break • ctrl+enter saves"
         } else if form.documents_selected() {
             " a adds a document • ←→ selects • d deletes selected document"
         } else {
@@ -629,6 +621,122 @@ fn render_agent_profile_form(
         .style(Style::default().fg(p.overlay0)),
         rows[3],
     );
+}
+
+fn render_agent_profile_document(
+    form: &crate::app::state::AgentProfileForm,
+    frame: &mut Frame,
+    area: Rect,
+    document_style: Style,
+) {
+    let cursor_visible = form.instructions_selected();
+    let document = agent_profile_document_text(
+        form.active_document_content(),
+        form.active_document_cursor(),
+        cursor_visible,
+    );
+    let paragraph = Paragraph::new(document.clone())
+        .style(document_style)
+        .wrap(Wrap { trim: false });
+
+    let (scroll, caret) = if cursor_visible {
+        let Some((caret_x, caret_y, line_count)) = document_caret_position(&document, area.width)
+        else {
+            frame.render_widget(
+                paragraph.scroll((
+                    form.active_document_scroll().min(u16::MAX as usize) as u16,
+                    0,
+                )),
+                area,
+            );
+            return;
+        };
+        let max_scroll = line_count.saturating_sub(area.height as usize);
+        let mut scroll = form.active_document_scroll().min(max_scroll);
+        if caret_y < scroll {
+            scroll = caret_y;
+        } else if caret_y >= scroll.saturating_add(area.height as usize) {
+            scroll = caret_y
+                .saturating_add(1)
+                .saturating_sub(area.height as usize);
+        }
+        (scroll, Some((caret_x, caret_y)))
+    } else {
+        (form.active_document_scroll(), None)
+    };
+
+    frame.render_widget(
+        paragraph.scroll((scroll.min(u16::MAX as usize) as u16, 0)),
+        area,
+    );
+    if let Some((caret_x, caret_y)) = caret {
+        let visible_y = caret_y.saturating_sub(scroll);
+        if caret_x < area.width && visible_y < area.height as usize {
+            frame.set_cursor_position((area.x + caret_x, area.y + visible_y as u16));
+        }
+    }
+}
+
+fn agent_profile_document_text<'a>(content: &'a str, cursor: usize, show_cursor: bool) -> Text<'a> {
+    let cursor = normalized_document_cursor(content, cursor);
+    let cursor_style = Style::default().add_modifier(Modifier::REVERSED);
+    let mut line_start = 0;
+    let mut lines = Vec::new();
+
+    for line in content.split('\n') {
+        let line_end = line_start + line.len();
+        let spans = if show_cursor && (line_start..=line_end).contains(&cursor) {
+            let cursor_in_line = cursor - line_start;
+            let (before, after) = line.split_at(cursor_in_line);
+            let mut spans = vec![Span::raw(before)];
+            if let Some(ch) = after.chars().next() {
+                let ch_len = ch.len_utf8();
+                spans.push(Span::styled(&after[..ch_len], cursor_style));
+                spans.push(Span::raw(&after[ch_len..]));
+            } else {
+                spans.push(Span::styled(" ", cursor_style));
+            }
+            spans
+        } else {
+            vec![Span::raw(line)]
+        };
+        lines.push(Line::from(spans));
+        line_start = line_end.saturating_add(1);
+    }
+
+    Text::from(lines)
+}
+
+fn normalized_document_cursor(content: &str, cursor: usize) -> usize {
+    let mut cursor = cursor.min(content.len());
+    while cursor > 0 && !content.is_char_boundary(cursor) {
+        cursor -= 1;
+    }
+    cursor
+}
+
+fn document_caret_position(document: &Text<'_>, width: u16) -> Option<(u16, usize, usize)> {
+    if width == 0 {
+        return None;
+    }
+    let paragraph = Paragraph::new(document.clone()).wrap(Wrap { trim: false });
+    let line_count = paragraph.line_count(width).max(1);
+    let height = line_count.min(u16::MAX as usize) as u16;
+    let area = Rect::new(0, 0, width, height);
+    let mut buffer = Buffer::empty(area);
+    paragraph.render(area, &mut buffer);
+
+    buffer
+        .content
+        .iter()
+        .position(|cell| cell.style().add_modifier.contains(Modifier::REVERSED))
+        .map(|index| {
+            (
+                (index % width as usize) as u16,
+                index / width as usize,
+                line_count,
+            )
+        })
 }
 
 fn agent_profile_form_line(label: &str, value: &str, selected: bool, p: &Palette) -> Line<'static> {
@@ -706,9 +814,14 @@ fn render_settings_toggle(
 
 #[cfg(test)]
 mod tests {
-    use ratatui::{backend::TestBackend, layout::Rect, Terminal};
+    use ratatui::{
+        backend::TestBackend,
+        layout::{Position, Rect},
+        style::Modifier,
+        Terminal,
+    };
 
-    use super::render_settings_overlay;
+    use super::{agent_profile_document_text, render_settings_overlay};
     use crate::app::{
         state::{
             AgentProfileForm, AgentProfileMarkdown, AppState, SavedAgentProfile, SettingsSection,
@@ -795,6 +908,54 @@ mod tests {
                 "missing {expected:?}: {rendered:?}"
             );
         }
+    }
+
+    #[test]
+    fn agent_profile_instructions_render_a_visible_caret_at_the_edit_position() {
+        let mut app = AppState::test_new();
+        app.mode = Mode::Settings;
+        app.settings.section = SettingsSection::Agents;
+        app.settings.agent_profile_form = Some(AgentProfileForm {
+            existing_role: None,
+            role: "reviewer".to_string(),
+            harness: "pi".to_string(),
+            native_cwd: "/workspace".to_string(),
+            model: String::new(),
+            effort: String::new(),
+            apikey_ref: String::new(),
+            allowlist: String::new(),
+            additional_markdown: Vec::new(),
+            linked_markdown: Vec::new(),
+            instructions: "edit".to_string(),
+            instructions_cursor: "ed".len(),
+            instructions_scroll: 0,
+            selected_markdown: None,
+            pending_markdown_name: None,
+            selected_field: 3,
+        });
+
+        let area = Rect::new(0, 0, 120, 36);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|frame| render_settings_overlay(&app, frame, area))
+            .unwrap();
+
+        let caret = terminal
+            .get_cursor_position()
+            .expect("editor should set a caret");
+        assert_ne!(caret, Position::new(0, 0));
+        let cell = &terminal.backend().buffer()[(caret.x, caret.y)];
+        assert_eq!(cell.symbol(), "i");
+        assert!(cell.style().add_modifier.contains(Modifier::REVERSED));
+    }
+
+    #[test]
+    fn agent_profile_document_text_shows_a_blank_caret_at_end_of_line() {
+        let document = agent_profile_document_text("edit", "edit".len(), true);
+        let caret = document.lines[0].spans.last().unwrap();
+
+        assert_eq!(caret.content, " ");
+        assert!(caret.style.add_modifier.contains(Modifier::REVERSED));
     }
 
     #[test]

@@ -1210,7 +1210,7 @@ pub struct AgentProfileMarkdown {
     pub content: String,
     /// Byte offset at a UTF-8 boundary in `content`.
     pub cursor: usize,
-    /// First logical content line shown in the editor viewport.
+    /// First rendered content row shown in the editor viewport.
     pub scroll: usize,
 }
 
@@ -1237,7 +1237,7 @@ pub struct AgentProfileForm {
     pub instructions: String,
     /// Byte offset at a UTF-8 boundary in `instructions`.
     pub instructions_cursor: usize,
-    /// First logical instruction line shown in the editor viewport.
+    /// First rendered instruction row shown in the editor viewport.
     pub instructions_scroll: usize,
     /// `None` selects `AGENTS.md`; an index selects an additional document.
     pub selected_markdown: Option<usize>,
@@ -1300,6 +1300,12 @@ impl AgentProfileForm {
         self.selected_markdown_index()
             .map(|index| self.additional_markdown[index].scroll)
             .unwrap_or(self.instructions_scroll)
+    }
+
+    pub fn active_document_cursor(&self) -> usize {
+        self.selected_markdown_index()
+            .map(|index| self.additional_markdown[index].cursor)
+            .unwrap_or(self.instructions_cursor)
     }
 
     pub fn active_document_mut(&mut self) -> (&mut String, &mut usize, &mut usize) {

@@ -858,6 +858,21 @@ fn non_foreground_client_render_preserves_agent_panel_scroll() {
     let api_socket = runtime_dir.join("herdr.sock");
     let client_socket = runtime_dir.join("herdr-client.sock");
 
+    let app_dir = if cfg!(debug_assertions) {
+        "herdr-dev"
+    } else {
+        "herdr"
+    };
+    fs::create_dir_all(config_home.join(app_dir)).unwrap();
+    fs::write(
+        config_home.join(app_dir).join("config.toml"),
+        r#"onboarding = false
+[ui.sidebar.agents]
+rows = [["state_icon", "workspace", "tab"], ["agent"]]
+"#,
+    )
+    .unwrap();
+
     let server = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_file(&client_socket, Duration::from_secs(10));

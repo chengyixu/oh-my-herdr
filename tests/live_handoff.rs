@@ -1721,8 +1721,8 @@ fn live_handoff_preserves_typed_profile_and_saved_harness_spawn() {
                 "native_cwd": agent_cwd,
                 "model": "sonnet",
                 "effort": "high",
-                "apikey_ref": "keychain:reviewer",
-                "allowlist": ["read", "write"]
+                "apikey_ref": "env:REVIEWER_API_KEY",
+                "allowlist": {"tools": ["read", "write"]}
             }
         }),
     );
@@ -1732,8 +1732,11 @@ fn live_handoff_preserves_typed_profile_and_saved_harness_spawn() {
     assert_eq!(profile["native_cwd"], canonical_cwd.display().to_string());
     assert_eq!(profile["model"], "sonnet");
     assert_eq!(profile["effort"], "high");
-    assert_eq!(profile["apikey_ref"], "keychain:reviewer");
-    assert_eq!(profile["allowlist"], serde_json::json!(["read", "write"]));
+    assert_eq!(profile["apikey_ref"], "env:REVIEWER_API_KEY");
+    assert_eq!(
+        profile["allowlist"],
+        serde_json::json!({"tools": ["read", "write"]})
+    );
 
     let set_md = request(
         &api_socket,

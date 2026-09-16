@@ -123,10 +123,12 @@ fn profile_allowlist_tools(value: &serde_json::Value) -> Option<Vec<String>> {
     .then_some(tools)
 }
 
+type ProfileLaunchSettings = (Vec<String>, Option<(String, String)>);
+
 fn profile_launch_settings(
     kind: &str,
     profile: &crate::agent_registry::AgentProfile,
-) -> Result<(Vec<String>, Option<(String, String)>), AgentSpawnError> {
+) -> Result<ProfileLaunchSettings, AgentSpawnError> {
     let mut args = Vec::new();
     if let Some(model) = &profile.model {
         if !matches!(kind, "claude" | "codex" | "pi") {
@@ -1536,7 +1538,7 @@ impl App {
         if params.apikey_ref.as_deref().is_some_and(|reference| {
             reference
                 .strip_prefix("env:")
-                .map_or(true, |source| !valid_env_name(source))
+                .is_none_or(|source| !valid_env_name(source))
         }) {
             return Err(AgentProfileError::InvalidApiKeyRef);
         }

@@ -463,7 +463,7 @@ fn apply_settings(state: &mut AppState) -> Option<SettingsAction> {
         }
         SettingsSection::Integrations => None,
         SettingsSection::Agents if state.settings.agent_profile_form.is_some() => {
-            return Some(SettingsAction::SaveAgentProfile);
+            Some(SettingsAction::SaveAgentProfile)
         }
         SettingsSection::Agents => None,
         _ => {
@@ -504,11 +504,17 @@ pub(super) fn update_settings_state(state: &mut AppState, key: KeyEvent) -> Opti
                 state.settings.section = SettingsSection::Integrations;
                 state.settings.list.selected = 0;
             }
-            _ => match super::modal::modal_action_from_key(&key, super::modal::SETTINGS_ACTIONS) {
-                Some(super::modal::ModalAction::Apply) => return apply_settings(state),
-                Some(super::modal::ModalAction::Close) => cancel_settings(state),
-                _ => {}
-            },
+            _ => {
+                if let Some(action) =
+                    super::modal::modal_action_from_key(&key, super::modal::SETTINGS_ACTIONS)
+                {
+                    match action {
+                        super::modal::ModalAction::Apply => return apply_settings(state),
+                        super::modal::ModalAction::Close => cancel_settings(state),
+                        _ => {}
+                    }
+                }
+            }
         },
         SettingsSection::Indicators => match key.code {
             KeyCode::Up | KeyCode::Char('k') | KeyCode::Down | KeyCode::Char('j') => {
@@ -656,10 +662,13 @@ pub(super) fn update_settings_state(state: &mut AppState, key: KeyEvent) -> Opti
                 state.settings.section = SettingsSection::Integrations;
                 state.settings.list.selected = 0;
             }
-            _ => match super::modal::modal_action_from_key(&key, super::modal::SETTINGS_ACTIONS) {
-                Some(super::modal::ModalAction::Close) => cancel_settings(state),
-                _ => {}
-            },
+            _ => {
+                if let Some(super::modal::ModalAction::Close) =
+                    super::modal::modal_action_from_key(&key, super::modal::SETTINGS_ACTIONS)
+                {
+                    cancel_settings(state);
+                }
+            }
         },
     }
 
@@ -683,9 +692,7 @@ fn agent_settings_selected_action(state: &AppState) -> Option<SettingsAction> {
 }
 
 fn update_agent_profile_form(state: &mut AppState, key: KeyEvent) -> Option<SettingsAction> {
-    let Some(form) = state.settings.agent_profile_form.as_mut() else {
-        return None;
-    };
+    let form = state.settings.agent_profile_form.as_mut()?;
     if let Some(name) = form.pending_markdown_name.as_mut() {
         match key.code {
             KeyCode::Esc => form.pending_markdown_name = None,
@@ -710,6 +717,12 @@ fn update_agent_profile_form(state: &mut AppState, key: KeyEvent) -> Option<Sett
     match key.code {
         KeyCode::Esc => {
             state.settings.agent_profile_form = None;
+        }
+        KeyCode::Up if form.instructions_selected() => {
+            move_agent_profile_instruction_cursor_vertical(form, false)
+        }
+        KeyCode::Down if form.instructions_selected() => {
+            move_agent_profile_instruction_cursor_vertical(form, true)
         }
         KeyCode::Up | KeyCode::BackTab => {
             form.selected_field = form.selected_field.saturating_sub(1)
@@ -864,6 +877,56 @@ fn insert_agent_profile_instructions(form: &mut AgentProfileForm, text: &str) {
     let current = (*cursor).min(content.len());
     content.insert_str(current, text);
     *cursor = current + text.len();
+}
+
+fn move_agent_profile_instruction_cursor_vertical(form: &mut AgentProfileForm, down: bool) {
+    let (content, cursor, _) = form.active_document_mut();
+    let current = (*cursor).min(content.len());
+    let current_start = instruction_line_start(content, current);
+    let current_end = instruction_line_end(content, current);
+    let desired_column = instruction_display_width(&content[current_start..current]);
+
+    let (target_start, target_end) = if down {
+        if current_end == content.len() {
+            return;
+        }
+        let start = current_end + 1;
+        (start, instruction_line_end(content, start))
+    } else {
+        if current_start == 0 {
+            return;
+        }
+        let end = current_start - 1;
+        (instruction_line_start(content, end), end)
+    };
+    *cursor =
+        instruction_offset_at_display_width(content, target_start, target_end, desired_column);
+}
+
+fn instruction_display_width(value: &str) -> usize {
+    value
+        .chars()
+        .map(|ch| unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0))
+        .sum()
+}
+
+fn instruction_offset_at_display_width(
+    value: &str,
+    start: usize,
+    end: usize,
+    desired_width: usize,
+) -> usize {
+    let mut offset = start;
+    let mut width = 0;
+    for (index, ch) in value[start..end].char_indices() {
+        let next_width = width + unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        if next_width > desired_width {
+            break;
+        }
+        width = next_width;
+        offset = start + index + ch.len_utf8();
+    }
+    offset
 }
 
 fn previous_instruction_boundary(value: &str, cursor: usize) -> usize {
@@ -1405,6 +1468,80 @@ mod tests {
                 KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL),
             ),
             Some(SettingsAction::SaveAgentProfile)
+        );
+    }
+
+    #[test]
+    fn agent_profile_instruction_arrows_move_cursor_without_leaving_editor() {
+        let mut state = state_with_workspaces(&["test"]);
+        open_settings_at(&mut state, SettingsSection::Agents);
+        state.settings.agent_profile_form = Some(AgentProfileForm {
+            existing_role: None,
+            role: "reviewer".to_string(),
+            harness: "codex".to_string(),
+            native_cwd: "/tmp".to_string(),
+            model: String::new(),
+            effort: String::new(),
+            apikey_ref: String::new(),
+            allowlist: String::new(),
+            additional_markdown: Vec::new(),
+            linked_markdown: Vec::new(),
+            instructions: "abcd\nwxyz\n1234".to_string(),
+            instructions_cursor: "abcd\nwx".len(),
+            instructions_scroll: 0,
+            selected_markdown: None,
+            pending_markdown_name: None,
+            selected_field: 3,
+        });
+
+        update_settings_state(
+            &mut state,
+            KeyEvent::new(KeyCode::Up, KeyModifiers::empty()),
+        );
+        let form = state.settings.agent_profile_form.as_ref().unwrap();
+        assert_eq!(form.instructions_cursor, 2);
+        assert_eq!(form.selected_field, form.instructions_field());
+
+        update_settings_state(
+            &mut state,
+            KeyEvent::new(KeyCode::Down, KeyModifiers::empty()),
+        );
+        assert_eq!(
+            state
+                .settings
+                .agent_profile_form
+                .as_ref()
+                .unwrap()
+                .instructions_cursor,
+            "abcd\nwx".len()
+        );
+
+        update_settings_state(
+            &mut state,
+            KeyEvent::new(KeyCode::Left, KeyModifiers::empty()),
+        );
+        assert_eq!(
+            state
+                .settings
+                .agent_profile_form
+                .as_ref()
+                .unwrap()
+                .instructions_cursor,
+            "abcd\nw".len()
+        );
+
+        update_settings_state(
+            &mut state,
+            KeyEvent::new(KeyCode::Right, KeyModifiers::empty()),
+        );
+        assert_eq!(
+            state
+                .settings
+                .agent_profile_form
+                .as_ref()
+                .unwrap()
+                .instructions_cursor,
+            "abcd\nwx".len()
         );
     }
 
