@@ -1925,6 +1925,13 @@ mod tests {
 
     #[test]
     fn pane_close_terminates_managed_roster_instance_after_closing() {
+        let _guard = crate::config::test_config_env_lock().lock().unwrap();
+        let root =
+            std::env::temp_dir().join(format!("herdr-pane-close-registry-{}", std::process::id()));
+        let old_home = std::env::var_os("XDG_CONFIG_HOME");
+        let old_session = std::env::var_os(crate::session::SESSION_ENV_VAR);
+        std::env::set_var("XDG_CONFIG_HOME", &root);
+        std::env::set_var(crate::session::SESSION_ENV_VAR, "pane-close-test");
         let (mut app, public_pane_id) = app_with_test_workspace();
         app.no_session = false;
         let pane_id = app.state.workspaces[0].tabs[0].root_pane;
@@ -1934,13 +1941,16 @@ mod tests {
             .get_mut(&terminal_id)
             .unwrap()
             .set_agent_name("reviewer".into());
-        app.agent_registry.roster_register(
-            "reviewer",
-            "reviewer",
-            "reviewer",
-            "",
-            Some(public_pane_id.clone()),
-        );
+        app.update_agent_registry(|registry| {
+            registry.roster_register(
+                "reviewer",
+                "reviewer",
+                "reviewer",
+                "",
+                Some(public_pane_id.clone()),
+            );
+        })
+        .unwrap();
 
         let response = app.handle_pane_close(
             "req".into(),
@@ -1956,6 +1966,15 @@ mod tests {
                 && entry.status == crate::agent_registry::AgentStatus::Terminated
         }));
         assert!(app.session_save_deadline.is_some());
+        match old_home {
+            Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+        match old_session {
+            Some(value) => std::env::set_var(crate::session::SESSION_ENV_VAR, value),
+            None => std::env::remove_var(crate::session::SESSION_ENV_VAR),
+        }
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

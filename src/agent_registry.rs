@@ -31,7 +31,7 @@ use tracing::warn;
 
 /// Format version — bumped for structurally incompatible changes. Newer files
 /// are preserved without loading so an older binary cannot overwrite them.
-pub const REGISTRY_VERSION: u32 = 2;
+pub const REGISTRY_VERSION: u32 = 3;
 const REGISTRY_FILENAME: &str = "agents.json";
 const REGISTRY_LOCK_FILENAME: &str = ".agents.lock";
 const PROFILE_CONTEXT_DIRECTORY: &str = "agent-context";
@@ -72,6 +72,20 @@ pub enum EffortLevel {
     #[default]
     Medium,
     High,
+}
+
+/// Native CLI capabilities shared by launch validation and profile controls.
+#[derive(Debug, Clone, Copy)]
+pub struct NativeHarnessCapabilities {
+    pub api_key_ref: bool,
+    pub tool_allowlist: bool,
+}
+
+pub fn native_harness_capabilities(harness: &str) -> NativeHarnessCapabilities {
+    NativeHarnessCapabilities {
+        api_key_ref: matches!(harness, "claude" | "codex"),
+        tool_allowlist: matches!(harness, "claude" | "pi"),
+    }
 }
 
 /// A saved agent profile — the thing shown in the Agents sidebar and clicked to
@@ -220,6 +234,9 @@ pub struct AgentRosterEntry {
     pub replica_suffix: String,
     /// The live agent name (`role` + suffix).
     pub display_name: String,
+    /// Exact-instance next-revival harness; absence inherits its saved profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness_override: Option<String>,
     pub status: AgentStatus,
     /// Last known pane address as a `w:t:p` string, if any.
     pub last_pane: Option<String>,
@@ -307,6 +324,34 @@ impl AgentRegistry {
         Some(removed)
     }
 
+    /// Allocate a new adoption identity without ever reusing an existing
+    /// profile or live display name. Caller holds the registry transaction.
+    pub fn adopt_instance(
+        &mut self,
+        seed: &str,
+        cwd: PathBuf,
+        harness: &str,
+        pane: Option<String>,
+    ) -> Option<AgentRosterEntry> {
+        let seed = seed.chars().take(MAX_NAME_LEN).collect::<String>();
+        let mut role = seed.clone();
+        let mut suffix = 0u32;
+        while self.profiles.contains_key(&role) || self.alive_instance(&role).is_some() {
+            suffix = suffix.checked_add(1)?;
+            let tail = format!("-{suffix}");
+            role = format!(
+                "{}{}",
+                seed.chars()
+                    .take(MAX_NAME_LEN.saturating_sub(tail.len()))
+                    .collect::<String>(),
+                tail
+            );
+        }
+        let profile = self.register_or_get(&role, cwd);
+        profile.harness = harness.into();
+        self.roster_register(&role, &role, &role, "", pane).cloned()
+    }
+
     // ---- Roster ---------------------------------------------------------
 
     /// Register (or update) a live instance. A reused display name after an
@@ -333,6 +378,7 @@ impl AgentRegistry {
                     role: role.to_string(),
                     replica_suffix: replica_suffix.to_string(),
                     display_name: display_name.to_string(),
+                    harness_override: None,
                     status: AgentStatus::Active,
                     last_pane: None,
                     last_seen_at: None,
@@ -844,11 +890,52 @@ fn resolve_write_target(path: &Path) -> std::io::Result<PathBuf> {
 pub fn update<T>(
     mutation: impl FnOnce(&mut AgentRegistry) -> T,
 ) -> std::io::Result<(T, AgentRegistry)> {
+    match try_update(|registry| Ok::<T, std::convert::Infallible>(mutation(registry)))? {
+        Ok(committed) => Ok(committed),
+        Err(never) => match never {},
+    }
+}
+
+/// Validate and mutate the freshly loaded registry inside its lock. Rejection
+/// discards all tentative mutations and leaves the on-disk bytes unchanged.
+pub fn try_update<T, E>(
+    mutation: impl FnOnce(&mut AgentRegistry) -> Result<T, E>,
+) -> std::io::Result<Result<(T, AgentRegistry), E>> {
     with_registry_lock(|target| {
         let mut registry = load_for_update(target)?;
-        let result = mutation(&mut registry);
-        save_to_path(target, &registry)?;
-        Ok((result, registry))
+        match mutation(&mut registry) {
+            Ok(result) => {
+                save_to_path(target, &registry)?;
+                Ok(Ok((result, registry)))
+            }
+            Err(err) => Ok(Err(err)),
+        }
+    })
+}
+
+/// Adopt an existing terminal with a collision-free profile, owned context,
+/// and roster record in a single locked commit. No process is launched.
+pub fn adopt_terminal(
+    seed: &str,
+    cwd: PathBuf,
+    harness: &str,
+    pane: Option<String>,
+) -> std::io::Result<(AgentRosterEntry, AgentRegistry)> {
+    with_registry_lock(|target| {
+        let mut registry = load_for_update(target)?;
+        let entry = registry
+            .adopt_instance(seed, cwd, harness, pane)
+            .ok_or_else(|| std::io::Error::other("agent identity allocation exhausted"))?;
+        let context_path = owned_instructions_path_at(target, &entry.profile_id);
+        write_owned_instructions(&context_path, &format!("# {} agent\n", entry.role))?;
+        if let Some(profile) = registry.get_mut(&entry.profile_id) {
+            profile.set_md(PROFILE_INSTRUCTIONS_FILENAME, context_path.clone());
+        }
+        if let Err(err) = save_to_path(target, &registry) {
+            let _ = std::fs::remove_file(&context_path);
+            return Err(err);
+        }
+        Ok((entry, registry))
     })
 }
 
@@ -1190,6 +1277,46 @@ mod tests {
 
     fn profile(role: &str) -> AgentProfile {
         AgentProfile::new(role, PathBuf::from("/tmp"), Path::new("/tmp"))
+    }
+
+    #[test]
+    fn rejected_registry_transaction_does_not_write_partial_mutations() {
+        let _guard = crate::config::test_config_env_lock().lock().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "ohmyherdr-rejected-registry-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let old_home = std::env::var_os("XDG_CONFIG_HOME");
+        let old_session = std::env::var_os(crate::session::SESSION_ENV_VAR);
+        std::env::set_var("XDG_CONFIG_HOME", &root);
+        std::env::set_var(crate::session::SESSION_ENV_VAR, "rejected-transaction");
+        update(|registry| {
+            registry.register_or_get("reviewer", root.clone()).harness = "pi".into();
+        })
+        .unwrap();
+        let before = std::fs::read(registry_path()).unwrap();
+        let result = try_update(|registry| {
+            registry.get_mut("reviewer").unwrap().apikey_ref = Some("env:PATH".into());
+            Err::<(), _>("unsupported native setting")
+        })
+        .unwrap()
+        .map(|(value, _)| value);
+        assert_eq!(result, Err("unsupported native setting"));
+        assert_eq!(
+            std::fs::read(registry_path()).unwrap(),
+            before,
+            "a rejected transaction must not commit a mutated registry"
+        );
+        match old_home {
+            Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+        match old_session {
+            Some(value) => std::env::set_var(crate::session::SESSION_ENV_VAR, value),
+            None => std::env::remove_var(crate::session::SESSION_ENV_VAR),
+        }
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1858,8 +1985,11 @@ mod tests {
 
     #[test]
     fn newer_registry_version_is_preserved_without_loading() {
-        let registry = parse(r#"{"version":3,"profiles":{"future":{}}}"#);
-        assert_eq!(registry.version, 3);
+        let future = REGISTRY_VERSION + 1;
+        let registry = parse(&format!(
+            r#"{{"version":{future},"profiles":{{"future":{{}}}}}}"#
+        ));
+        assert_eq!(registry.version, future);
         assert!(registry.profiles.is_empty());
         assert!(registry.roster.is_empty());
         assert!(save(&registry).is_err());

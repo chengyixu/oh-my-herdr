@@ -582,7 +582,11 @@ fn restore_tab(
                     agent,
                     saved_agent_roster_instance_id.clone(),
                 ),
-                (Some(_), None) => {}
+                (Some(agent_name), None) => {
+                    if let Some(instance_id) = saved_agent_roster_instance_id.clone() {
+                        terminal.bind_agent_roster_identity(agent_name, instance_id);
+                    }
+                }
                 (None, _) => {}
             }
             if let Some(agent) = initial_restore_agent {
@@ -679,7 +683,13 @@ fn restore_tab(
                     (Some(agent_name), Some(agent)) if was_imported => terminal
                         .restore_managed_agent(agent_name, agent, saved_agent_roster_instance_id),
                     (Some(_), Some(_)) => {}
-                    (Some(agent_name), None) if was_imported => terminal.set_agent_name(agent_name),
+                    (Some(agent_name), None) if was_imported => {
+                        if let Some(instance_id) = saved_agent_roster_instance_id {
+                            terminal.bind_agent_roster_identity(agent_name, instance_id);
+                        } else {
+                            terminal.set_agent_name(agent_name);
+                        }
+                    }
                     (Some(_), None) => {}
                     (None, _) => {}
                 }
@@ -1657,7 +1667,7 @@ mod tests {
     #[cfg(unix)]
     async fn native_agent_restore_defers_runtime_launch() {
         let cwd = std::env::current_dir().unwrap();
-        let snapshot = SessionSnapshot {
+        let mut snapshot = SessionSnapshot {
             version: super::super::snapshot::SNAPSHOT_VERSION,
             workspaces: vec![WorkspaceSnapshot {
                 id: Some("workspace".into()),
@@ -1766,6 +1776,33 @@ mod tests {
             handoff_runtimes.is_empty(),
             "handoff restore should not replace pending native agent resume with a shell runtime"
         );
+        snapshot.workspaces[0].tabs[0]
+            .panes
+            .get_mut(&0)
+            .unwrap()
+            .managed_agent_kind = None;
+        let (_, adopted_terminals, adopted_runtimes) = restore(
+            &snapshot,
+            None,
+            24,
+            80,
+            0,
+            test_restore_shell(),
+            crate::config::ShellModeConfig::NonLogin,
+            true,
+            mpsc::channel(4).0,
+            Arc::new(Notify::new()),
+            Arc::new(RenderSignal::new()),
+        );
+        let adopted = adopted_terminals.values().next().unwrap();
+        assert!(adopted.pending_agent_resume_plan.is_some());
+        assert_eq!(adopted.agent_name.as_deref(), Some("reviewer"));
+        assert_eq!(
+            adopted.live_roster_instance_id(),
+            Some("reviewer-instance-1")
+        );
+        assert!(adopted.managed_agent_kind().is_none());
+        assert!(adopted_runtimes.is_empty());
     }
 
     #[tokio::test]

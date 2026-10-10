@@ -265,6 +265,7 @@ fn agent_panel_sort_from_config(
         crate::config::AgentPanelSortConfig::Spaces => state::AgentPanelSort::Spaces,
         crate::config::AgentPanelSortConfig::Priority => state::AgentPanelSort::Priority,
         crate::config::AgentPanelSortConfig::Agents => state::AgentPanelSort::Agents,
+        crate::config::AgentPanelSortConfig::CurrentTab => state::AgentPanelSort::CurrentTab,
     }
 }
 
@@ -567,6 +568,7 @@ impl App {
             active,
             previous_pane_focus: None,
             saved_agent_profiles: Vec::new(),
+            agent_harness_overrides: std::collections::HashMap::new(),
             selected,
             mode,
             should_quit: false,
@@ -3817,6 +3819,16 @@ mod tests {
         assert_eq!(app.state.agent_panel_sort, state::AgentPanelSort::Agents);
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("agent_panel_sort = \"agents\""));
+        app.save_agent_panel_sort(state::AgentPanelSort::CurrentTab);
+        assert_eq!(
+            app.state.agent_panel_sort,
+            state::AgentPanelSort::CurrentTab
+        );
+        let restored = crate::config::Config::load().config;
+        assert_eq!(
+            restored.ui.agent_panel_sort,
+            crate::config::AgentPanelSortConfig::CurrentTab
+        );
         assert!(app.state.config_diagnostic.is_none());
 
         std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);

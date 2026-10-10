@@ -129,6 +129,10 @@ pub enum Method {
     AgentRevive(AgentReviveParams),
     #[serde(rename = "agent.roster.list")]
     AgentRosterList(EmptyParams),
+    #[serde(rename = "agent.harness.prepare")]
+    AgentHarnessPrepare(AgentTarget),
+    #[serde(rename = "agent.harness.set")]
+    AgentHarnessSet(AgentHarnessSetParams),
     #[serde(rename = "agent.profile.create")]
     AgentProfileCreate(AgentProfileCreateParams),
     #[serde(rename = "agent.profile.set_md")]

@@ -125,7 +125,17 @@ fn completion_command() -> Command {
 fn update_command() -> Command {
     Command::new("update")
         .about("Download and install the latest version")
-        .arg(flag("handoff").help("Try live handoff after installing"))
+        .arg(
+            flag("handoff")
+                .help("Try live handoff after installing")
+                .conflicts_with("check"),
+        )
+        .arg(flag("check").help("Read-only update check; never install or interrupt sessions"))
+        .arg(
+            flag("all")
+                .help("Check Herdr and Ohmyherdr separately")
+                .requires("check"),
+        )
 }
 
 fn status_command() -> Command {

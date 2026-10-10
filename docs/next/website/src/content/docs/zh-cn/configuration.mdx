@@ -340,6 +340,18 @@ status_indicators = "symbols"
 
 这些符号是静态的，因此该选项不会启用旋转动画。
 
+### 侧边栏视图与原生 Agent 配置
+
+点击 Agents 标题控件可切换 **grouped**、**priority**、**agents**（已保存的配置）和 **current tab**。当前标签页视图只显示活动标签页中的 Agent，排除其他标签页和空间；选择保存为 `ui.agent_panel_sort = "current-tab"`。
+
+每个支持的 Agent 终端上方提供 **Harness…** 控件，不覆盖终端内容。菜单中的 **Native harness...** 为该实例下次恢复选择 Codex、Pi、Claude 或配置默认值，不影响同配置的其他实例。手动启动的 Agent 会获得原生注册表中的持久身份，不重启进程。跨 harness 恢复保留 Markdown，但使用新 harness 的身份验证、模型和工具默认设置。
+
+右键点击运行中的 Agent，或点击已保存的配置，可打开管理菜单。**Native harness...** 打开原生 harness 选择器；**Edit profile** 打开文档编辑器。修改保存在会话原生 `agents.json` 注册表中，下次启动或恢复时生效，不替换运行中的 Agent，也不丢失配置自有的 Markdown。未命名的 Agent 可从该菜单创建配置。
+
+API key 引用使用 `env:NAME` 将已导出的环境变量映射到 Claude 的 `ANTHROPIC_API_KEY` 或 Codex 的 `OPENAI_API_KEY`，不保存密钥值。Pi 使用原生 provider 身份验证，因此隐藏该控件。Claude 的 **auto-approved tools** 对应 `--allowedTools`，控制权限批准，并非沙箱；Pi 的 **built-in tools** 对应 `--tools`，不是扩展或 MCP 的安全边界。字段接受 `{"tools":["read","write"]}` 等 JSON，工具名须适合对应 harness。Codex 不提供该工具控件。保存切换到不支持这些能力的 harness 时，会清除相应的不支持设置。
+
+`herdr update --check --all` 或 `ohmyherdr update --check --all` 只读报告两个产品的独立更新源，不安装、不改配置、不联系运行中的服务器。Ohmyherdr 更新安装包含经审查的上游源码合并及保留定制功能的 fork 构建。不能用原始 Herdr 二进制覆盖 Ohmyherdr；上游更新在合并、测试并发布为 Ohmyherdr 前仅作提示。
+
 ### 侧边栏行布局
 
 展开的桌面侧边栏会将 `rows` 中的每个内层数组渲染为一行。以下是完整的默认布局：

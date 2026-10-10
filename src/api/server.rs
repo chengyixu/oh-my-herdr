@@ -423,6 +423,8 @@ fn api_method_name(method: &Method) -> &'static str {
         Method::AgentSpawn(_) => "agent.spawn",
         Method::AgentRevive(_) => "agent.revive",
         Method::AgentRosterList(_) => "agent.roster.list",
+        Method::AgentHarnessPrepare(_) => "agent.harness.prepare",
+        Method::AgentHarnessSet(_) => "agent.harness.set",
         Method::AgentProfileCreate(_) => "agent.profile.create",
         Method::AgentProfileSetMd(_) => "agent.profile.set_md",
         Method::AgentProfileGet(_) => "agent.profile.get",

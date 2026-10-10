@@ -5,9 +5,8 @@ use tracing::warn;
 
 use crate::{
     app::state::{
-        AgentPanelSort, AppState, ContextMenuKind, ContextMenuState, DragState, DragTarget,
-        MenuListState, Mode, RightClickPassthroughGesture, TabPressState, ViewLayout,
-        WorkspacePressState,
+        AppState, ContextMenuKind, ContextMenuState, DragState, DragTarget, MenuListState, Mode,
+        RightClickPassthroughGesture, TabPressState, ViewLayout, WorkspacePressState,
     },
     layout::{PaneInfo, SplitBorder},
     selection::Selection,
@@ -438,6 +437,39 @@ impl AppState {
                     return None;
                 }
 
+                if let Some(info) = self
+                    .view
+                    .pane_infos
+                    .iter()
+                    .find(|info| {
+                        crate::ui::agent_pane_harness_rect(self, info).is_some_and(|rect| {
+                            mouse.column >= rect.x
+                                && mouse.column < rect.x + rect.width
+                                && mouse.row == rect.y
+                        })
+                    })
+                    .cloned()
+                {
+                    if let Some(ws_idx) = self.active {
+                        if let Some(tab_idx) =
+                            self.workspaces[ws_idx].find_tab_index_for_pane(info.id)
+                        {
+                            self.context_menu = Some(ContextMenuState {
+                                kind: ContextMenuKind::Agent {
+                                    ws_idx,
+                                    tab_idx,
+                                    pane_id: info.id,
+                                },
+                                x: mouse.column,
+                                y: mouse.row,
+                                list: MenuListState::new(0),
+                            });
+                            self.mode = Mode::ContextMenu;
+                        }
+                    }
+                    return None;
+                }
+
                 if self.on_sidebar_divider(mouse.column, mouse.row) {
                     self.drag = Some(DragState {
                         target: DragTarget::SidebarDivider,
@@ -625,11 +657,7 @@ impl AppState {
                     }
 
                     if self.on_agent_panel_sort_toggle(mouse.column, mouse.row) {
-                        self.agent_panel_sort = match self.agent_panel_sort {
-                            AgentPanelSort::Spaces => AgentPanelSort::Priority,
-                            AgentPanelSort::Priority => AgentPanelSort::Agents,
-                            AgentPanelSort::Agents => AgentPanelSort::Spaces,
-                        };
+                        self.agent_panel_sort = self.agent_panel_sort.next();
                         self.agent_panel_scroll = 0;
                         self.mark_session_dirty();
                         return None;
@@ -1069,7 +1097,28 @@ impl AppState {
                 if self
                     .workspace_list_scrollbar_target_at(mouse.column, mouse.row)
                     .is_some()
+                    || self
+                        .agent_panel_scrollbar_target_at(mouse.column, mouse.row)
+                        .is_some()
                 {
+                    return None;
+                }
+                if let Some(role) = self.saved_agent_profile_target_at(mouse.row) {
+                    self.open_agent_profile_spawn_menu(role, mouse.column, mouse.row);
+                    return None;
+                }
+                if let Some((ws_idx, tab_idx, pane_id)) = self.agent_detail_target_at(mouse.row) {
+                    self.context_menu = Some(ContextMenuState {
+                        kind: ContextMenuKind::Agent {
+                            ws_idx,
+                            tab_idx,
+                            pane_id,
+                        },
+                        x: mouse.column,
+                        y: mouse.row,
+                        list: MenuListState::new(0),
+                    });
+                    self.mode = Mode::ContextMenu;
                     return None;
                 }
                 if let Some(idx) = self.workspace_at_row(mouse.row) {
@@ -3306,6 +3355,41 @@ mod tests {
             search_focused: false,
             error: None,
         }
+    }
+
+    #[test]
+    fn each_agent_pane_exposes_a_harness_control_above_terminal_content() {
+        let mut app = app_for_mouse_test();
+        app.state.workspaces = vec![crate::workspace::Workspace::test_new("project")];
+        app.state.active = Some(0);
+        app.state.mode = Mode::Terminal;
+        app.state.ensure_test_terminals();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let id = app.state.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        app.state.terminals.get_mut(&id).unwrap().detected_agent = Some(crate::detect::Agent::Pi);
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 30));
+        let info = app.state.view.pane_infos[0].clone();
+        assert_eq!(
+            info.inner_rect.y,
+            info.rect.y + 1,
+            "agent header must not overwrite terminal content"
+        );
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            info.rect.x,
+            info.rect.y,
+        ));
+        let menu = app
+            .state
+            .context_menu
+            .as_ref()
+            .expect("pane-local harness menu");
+        assert!(menu.items().contains(&"Native harness..."));
+        assert!(
+            matches!(menu.kind, ContextMenuKind::Agent { pane_id: target, .. } if target == pane_id)
+        );
     }
 
     #[test]

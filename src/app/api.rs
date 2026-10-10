@@ -1122,6 +1122,12 @@ impl App {
             Method::AgentSpawn(params) => return self.handle_agent_spawn(request.id, params),
             Method::AgentRevive(params) => return self.handle_agent_revive(request.id, params),
             Method::AgentRosterList(_) => return self.handle_agent_roster_list(request.id),
+            Method::AgentHarnessPrepare(params) => {
+                return self.handle_agent_harness_prepare(request.id, params)
+            }
+            Method::AgentHarnessSet(params) => {
+                return self.handle_agent_harness_set(request.id, params)
+            }
             Method::AgentProfileCreate(params) => {
                 return self.handle_agent_profile_create(request.id, params)
             }

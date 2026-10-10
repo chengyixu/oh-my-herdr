@@ -71,6 +71,7 @@ pub(crate) use self::{
         open_existing_worktree_visible_start, remove_worktree_button_rects,
         remove_worktree_popup_rect, rename_button_rects,
     },
+    panes::agent_pane_harness_rect,
     settings::{
         settings_button_rects, settings_popup_height, settings_show_primary_action,
         SETTINGS_POPUP_WIDTH,

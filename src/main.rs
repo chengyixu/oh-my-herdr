@@ -609,7 +609,7 @@ fn main() -> io::Result<()> {
             Err(err) => {
                 eprintln!("{err}");
                 eprintln!(
-                    "usage: {} update [--handoff]",
+                    "usage: {} update [--handoff] | --check [--all]",
                     crate::config::product_name()
                 );
                 std::process::exit(2);

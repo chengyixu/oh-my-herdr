@@ -1938,6 +1938,13 @@ impl TerminalState {
         self.managed_agent.map(|managed| managed.kind)
     }
 
+    /// Give a detected, manually started agent a durable identity without
+    /// pretending its process was launched or resumed by Herdr.
+    pub fn bind_agent_roster_identity(&mut self, name: String, instance_id: String) {
+        self.set_agent_name(name);
+        self.live_roster_instance_id = Some(instance_id);
+    }
+
     pub fn live_roster_instance_id(&self) -> Option<&str> {
         self.live_roster_instance_id.as_deref()
     }

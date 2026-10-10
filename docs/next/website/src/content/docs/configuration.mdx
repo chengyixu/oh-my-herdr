@@ -344,6 +344,18 @@ status_indicators = "symbols"
 
 The symbols are static, so this option does not enable spinner animation.
 
+### Sidebar views and native agent profiles
+
+Click the Agents header control to cycle through **grouped**, **priority**, **agents** (saved profiles), and **current tab**. The current-tab view follows the active tab and excludes agents in other tabs and spaces. The choice is saved as `ui.agent_panel_sort = "current-tab"`.
+
+A **Harness…** control sits above each supported agent terminal, outside its content. It opens the agent menu; **Native harness...** selects Codex, Pi, Claude, or the profile default for that exact instance's next revival. Sibling agents and the shared profile are unchanged. Manually launched agents receive a durable native registry identity without restarting. Cross-harness revival retains profile Markdown but uses native auth/model/tool defaults because those settings are not portable.
+
+Right-click a live agent row or click a saved profile to open its management menu. On a saved profile, **Native harness...** changes its default for future launches; **Edit profile** opens its documents. Changes persist in the session's native `agents.json` registry. They apply to the next launch or revival, without replacing a running agent or losing its profile-owned Markdown. Unnamed agents can create a saved profile from this menu.
+
+API key references use `env:NAME` to map an exported variable to Claude's `ANTHROPIC_API_KEY` or Codex's `OPENAI_API_KEY`; no secret value is stored. Pi uses its own native provider authentication, so that control is hidden. Claude's **auto-approved tools** field maps to `--allowedTools` (permission approval, not a sandbox); Pi's **built-in tools** field maps to `--tools`, which is not a security boundary for extensions or MCP. Both accept JSON such as `{"tools":["read","write"]}` with harness-appropriate names. Codex has no such tool control here. Saving a switch to a harness without one of these capabilities clears that unsupported profile setting.
+
+`herdr update --check --all` or `ohmyherdr update --check --all` reports both release feeds as separate products without installing, changing config, or contacting running servers. Ohmyherdr updates install fork builds containing reviewed upstream source merges and preserved fork features. Raw upstream Herdr binaries must not overwrite Ohmyherdr. The upstream feed is advisory until its release has been integrated, tested, and published as an Ohmyherdr build.
+
 ### Sidebar row layouts
 
 The expanded desktop sidebar renders each inner array in `rows` as one line. These are the complete default layouts:

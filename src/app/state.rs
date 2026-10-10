@@ -1082,6 +1082,18 @@ pub enum AgentPanelSort {
     Spaces,
     Priority,
     Agents,
+    CurrentTab,
+}
+
+impl AgentPanelSort {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Spaces => Self::Priority,
+            Self::Priority => Self::Agents,
+            Self::Agents => Self::CurrentTab,
+            Self::CurrentTab => Self::Spaces,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1260,6 +1272,22 @@ impl AgentProfileForm {
         }
     }
 
+    pub fn field_enabled(&self, field: usize) -> bool {
+        if self.is_new() {
+            return field < self.field_count();
+        }
+        let capabilities = crate::agent_registry::native_harness_capabilities(&self.harness);
+        match field {
+            4 => capabilities.api_key_ref,
+            5 => capabilities.tool_allowlist,
+            _ => field < self.field_count(),
+        }
+    }
+
+    pub fn visible_fields(&self) -> impl Iterator<Item = usize> + '_ {
+        (0..self.field_count()).filter(|field| self.field_enabled(*field))
+    }
+
     pub fn documents_field(&self) -> Option<usize> {
         (!self.is_new()).then_some(6)
     }
@@ -1433,6 +1461,14 @@ pub enum ContextMenuKind {
         has_manual_label: bool,
         right_click_passthrough: bool,
     },
+    Agent {
+        ws_idx: usize,
+        tab_idx: usize,
+        pane_id: PaneId,
+    },
+    AgentHarness {
+        instance_id: String,
+    },
     AgentProfileSpawn {
         role: String,
         ws_idx: usize,
@@ -1495,10 +1531,17 @@ impl ContextMenuState {
                 items.push("Close pane");
                 items
             }
+            ContextMenuKind::Agent { .. } => {
+                vec!["Native harness...", "Edit profile", "Focus agent"]
+            }
+            ContextMenuKind::AgentHarness { .. } => {
+                vec!["Use profile harness", "codex", "pi", "claude"]
+            }
             ContextMenuKind::AgentProfileSpawn { .. } => {
                 vec![
                     "Use space cwd",
                     "Use agent native cwd",
+                    "Native harness...",
                     "Edit profile",
                     "Delete profile",
                 ]
@@ -1623,6 +1666,8 @@ pub struct AppState {
     pub active: Option<usize>,
     pub(crate) previous_pane_focus: Option<PaneFocusTarget>,
     pub saved_agent_profiles: Vec<SavedAgentProfile>,
+    /// Pure projection of exact-instance next-revival overrides for pane headers.
+    pub agent_harness_overrides: std::collections::HashMap<String, String>,
     pub selected: usize,
     pub mode: Mode,
     /// Stable workspace identity captured when the close confirmation opens.
@@ -2022,6 +2067,7 @@ impl AppState {
             active: None,
             previous_pane_focus: None,
             saved_agent_profiles: Vec::new(),
+            agent_harness_overrides: std::collections::HashMap::new(),
             selected: 0,
             mode: Mode::Navigate,
             confirm_close_workspace_id: None,
@@ -2502,6 +2548,16 @@ impl AppState {
                 ContextMenuKind::Tab { ws_idx, tab_idx } => {
                     assert_tab_index(ws_idx, tab_idx, "context menu tab")
                 }
+                ContextMenuKind::Agent {
+                    ws_idx,
+                    tab_idx,
+                    pane_id,
+                } => {
+                    assert_tab_index(ws_idx, tab_idx, "context menu agent tab");
+                    assert!(self.workspaces[ws_idx].tabs[tab_idx]
+                        .panes
+                        .contains_key(&pane_id));
+                }
                 ContextMenuKind::Pane {
                     ws_idx,
                     tab_idx,
@@ -2523,6 +2579,7 @@ impl AppState {
                         assert_live_pane(source_pane_id, "context menu source pane");
                     }
                 }
+                ContextMenuKind::AgentHarness { .. } => {}
                 ContextMenuKind::AgentProfileSpawn { ws_idx, .. } => {
                     assert_workspace_index(ws_idx, "context menu agent profile workspace");
                 }

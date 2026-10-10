@@ -93,13 +93,14 @@ pub enum ToastClipboardPosition {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "kebab-case")]
 pub enum AgentPanelSortConfig {
     #[default]
     #[serde(alias = "workspaces")]
     Spaces,
     Priority,
     Agents,
+    CurrentTab,
 }
 
 impl AgentPanelSortConfig {
@@ -108,6 +109,7 @@ impl AgentPanelSortConfig {
             Self::Spaces => "spaces",
             Self::Priority => "priority",
             Self::Agents => "agents",
+            Self::CurrentTab => "current-tab",
         }
     }
 }
@@ -900,7 +902,7 @@ pub struct UiConfig {
     /// Format for the outer terminal window title. Empty leaves the title alone.
     /// Default: "{hostname}: {workspace}".
     pub window_title: String,
-    /// Agent sidebar view. Saved values are "spaces", "priority", or "agents". Default: "spaces".
+    /// Agent sidebar view: "spaces", "priority", "agents", or "current-tab". Default: "spaces".
     pub agent_panel_sort: AgentPanelSortConfig,
     /// Retired setting that Herdr wrote before the workspace filter was removed.
     #[serde(rename = "agent_panel_scope")]

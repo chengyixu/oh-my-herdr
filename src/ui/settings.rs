@@ -487,7 +487,7 @@ fn render_agent_profile_form(
     let description = if form.is_new() {
         "choose a role, working directory, and profile-owned AGENTS.md"
     } else {
-        "inspect and change saved native settings and profile documents"
+        "saved for next launch/revive; running agents stay unchanged"
     };
     let mut details = vec![
         Line::from(Span::styled(
@@ -546,18 +546,26 @@ fn render_agent_profile_form(
             form.selected_field == 3,
             p,
         ));
-        details.push(agent_profile_form_line(
-            "API key ref",
-            display_agent_profile_value(&form.apikey_ref, "not set"),
-            form.selected_field == 4,
-            p,
-        ));
-        details.push(agent_profile_form_line(
-            "tool allowlist",
-            display_agent_profile_value(&form.allowlist, "not set"),
-            form.selected_field == 5,
-            p,
-        ));
+        if form.field_enabled(4) {
+            details.push(agent_profile_form_line(
+                "API key ref (env:NAME)",
+                display_agent_profile_value(&form.apikey_ref, "native auth"),
+                form.selected_field == 4,
+                p,
+            ));
+        }
+        if form.field_enabled(5) {
+            details.push(agent_profile_form_line(
+                if form.harness == "claude" {
+                    "auto-approved tools"
+                } else {
+                    "built-in tools"
+                },
+                display_agent_profile_value(&form.allowlist, r#"{"tools":["read"]}"#),
+                form.selected_field == 5,
+                p,
+            ));
+        }
         if let Some(name) = &form.pending_markdown_name {
             details.push(agent_profile_form_line(
                 "new .md",
@@ -1023,6 +1031,26 @@ mod tests {
             );
         }
 
+        let form = app.settings.agent_profile_form.as_mut().unwrap();
+        form.harness = "codex".into();
+        form.allowlist.clear();
+        let rendered = rendered_text(&app);
+        assert!(
+            !rendered.contains("tool allowlist"),
+            "Codex cannot enforce a tool allowlist"
+        );
+        assert!(
+            rendered.contains("env:NAME"),
+            "key reference must explain its native environment source"
+        );
+        let form = app.settings.agent_profile_form.as_mut().unwrap();
+        form.harness = "pi".into();
+        form.apikey_ref.clear();
+        let rendered = rendered_text(&app);
+        assert!(
+            !rendered.contains("API key ref"),
+            "Pi authentication belongs to its native provider"
+        );
         let form = app.settings.agent_profile_form.as_mut().unwrap();
         form.selected_markdown = Some(0);
         form.selected_field = form.instructions_field();

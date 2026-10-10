@@ -239,10 +239,33 @@ pub struct AgentRosterEntryInfo {
     pub replica_suffix: String,
     pub display_name: String,
     pub status: AgentRosterStatus,
+    /// Saved harness for this exact instance's next revival; otherwise profile default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness_override: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_pane: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_seen_at: Option<i64>,
+}
+
+/// Persist one agent instance's next-revival harness without changing its
+/// running process, sibling instances, or saved profile. Null inherits profile.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AgentHarnessSetParams {
+    pub instance_id: String,
+    #[serde(deserialize_with = "deserialize_explicit_harness")]
+    #[schemars(required, schema_with = "explicit_harness_schema")]
+    pub harness: Option<String>,
+}
+
+fn explicit_harness_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({ "type": ["string", "null"] })
+}
+
+fn deserialize_explicit_harness<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    Option::<String>::deserialize(deserializer)
 }
 
 fn default_tab_cwd_mode() -> String {

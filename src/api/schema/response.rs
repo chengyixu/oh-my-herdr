@@ -110,6 +110,10 @@ pub enum ResponseResult {
     AgentRosterList {
         entries: Vec<AgentRosterEntryInfo>,
     },
+    AgentHarnessSet {
+        instance_id: String,
+        harness_override: Option<String>,
+    },
     AgentProfileInfoSet {
         profile: AgentProfileInfo,
     },

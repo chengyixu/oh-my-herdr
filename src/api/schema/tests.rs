@@ -271,6 +271,31 @@ fn agent_start_and_prompt_requests_round_trip() {
 }
 
 #[test]
+fn instance_harness_choice_is_explicit_and_nullable_in_schema_and_runtime() {
+    assert!(serde_json::from_value::<AgentHarnessSetParams>(
+        serde_json::json!({"instance_id":"one"})
+    )
+    .is_err());
+    assert_eq!(
+        serde_json::from_value::<AgentHarnessSetParams>(
+            serde_json::json!({"instance_id":"one","harness":null})
+        )
+        .unwrap()
+        .harness,
+        None
+    );
+    let schema = protocol_schema_entry::<AgentHarnessSetParams>("harness_set");
+    assert!(schema["required"]
+        .as_array()
+        .unwrap()
+        .contains(&serde_json::json!("harness")));
+    assert_eq!(
+        schema["properties"]["harness"]["type"],
+        serde_json::json!(["string", "null"])
+    );
+}
+
+#[test]
 fn agent_spawn_schema_publishes_runtime_constraints() {
     let params = protocol_schema_entry::<AgentSpawnParams>("agent_spawn");
     assert_eq!(

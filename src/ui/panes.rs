@@ -54,6 +54,49 @@ pub(crate) fn pane_inner_rect(area: Rect, borders: Borders) -> Rect {
     }
 }
 
+fn agent_pane_header_enabled(
+    app: &AppState,
+    tab: &crate::workspace::Tab,
+    pane_id: crate::layout::PaneId,
+    inner: Rect,
+) -> bool {
+    inner.height > 2
+        && inner.width >= 12
+        && tab
+            .terminal_id(pane_id)
+            .and_then(|id| app.terminals.get(id))
+            .is_some_and(|terminal| {
+                terminal.is_agent_terminal() || terminal.managed_agent_kind().is_some()
+            })
+}
+
+fn agent_pane_content_rect(
+    app: &AppState,
+    tab: &crate::workspace::Tab,
+    pane_id: crate::layout::PaneId,
+    inner: Rect,
+) -> Rect {
+    if agent_pane_header_enabled(app, tab, pane_id, inner) {
+        Rect::new(inner.x, inner.y + 1, inner.width, inner.height - 1)
+    } else {
+        inner
+    }
+}
+
+pub(crate) fn agent_pane_harness_rect(app: &AppState, info: &PaneInfo) -> Option<Rect> {
+    let tab = app
+        .active
+        .and_then(|idx| app.workspaces.get(idx))
+        .and_then(|ws| ws.active_tab())?;
+    let inner = pane_inner_rect(info.rect, info.borders);
+    agent_pane_header_enabled(app, tab, info.id, inner).then_some(Rect::new(
+        inner.x,
+        inner.y,
+        10.min(inner.width),
+        1,
+    ))
+}
+
 fn ranges_overlap(a_start: u16, a_len: u16, b_start: u16, b_len: u16) -> bool {
     a_start < b_start.saturating_add(b_len) && b_start < a_start.saturating_add(a_len)
 }
@@ -213,7 +256,8 @@ pub(super) fn resize_tab_panes(
             } else {
                 Borders::NONE
             };
-            let pane_inner = pane_inner_rect(area, borders);
+            let pane_inner =
+                agent_pane_content_rect(app, tab, focused_id, pane_inner_rect(area, borders));
             let inner_rect = terminal_inner_rect(rt, pane_inner, app.pane_scrollbars);
             if !app.direct_attach_resize_locks.contains(terminal_id) {
                 rt.resize(
@@ -233,7 +277,8 @@ pub(super) fn resize_tab_panes(
         app.pane_gaps,
         app.pane_outer_borders,
     ) {
-        let pane_inner = pane_inner_rect(info.rect, info.borders);
+        let pane_inner =
+            agent_pane_content_rect(app, tab, info.id, pane_inner_rect(info.rect, info.borders));
 
         if let Some((terminal_id, rt)) = runtime_for_tab_pane(terminal_runtimes, tab, info.id) {
             let inner_rect = terminal_inner_rect(rt, pane_inner, app.pane_scrollbars);
@@ -273,7 +318,12 @@ pub(super) fn compute_pane_infos(
         } else {
             Borders::NONE
         };
-        let pane_inner = pane_inner_rect(area, borders);
+        let pane_inner = ws
+            .active_tab()
+            .map(|tab| {
+                agent_pane_content_rect(app, tab, focused_id, pane_inner_rect(area, borders))
+            })
+            .unwrap_or_else(|| pane_inner_rect(area, borders));
         let mut inner_rect = pane_inner;
         let mut scrollbar_rect = None;
         if let Some(rt) = app.runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, focused_id) {
@@ -310,7 +360,12 @@ pub(super) fn compute_pane_infos(
     );
 
     for info in &mut pane_infos {
-        let pane_inner = pane_inner_rect(info.rect, info.borders);
+        let pane_inner = ws
+            .active_tab()
+            .map(|tab| {
+                agent_pane_content_rect(app, tab, info.id, pane_inner_rect(info.rect, info.borders))
+            })
+            .unwrap_or_else(|| pane_inner_rect(info.rect, info.borders));
 
         let mut inner_rect = pane_inner;
         let mut scrollbar_rect = None;
@@ -410,6 +465,48 @@ pub(super) fn render_panes(
     }
 
     render_pane_borders(app, ws, pane_infos, split_borders, frame);
+    for info in pane_infos {
+        if let Some(rect) = agent_pane_harness_rect(app, info) {
+            let terminal = ws
+                .pane_state(info.id)
+                .and_then(|pane| app.terminals.get(&pane.attached_terminal_id));
+            let label = terminal
+                .and_then(|terminal| {
+                    terminal.effective_agent_label().or_else(|| {
+                        terminal
+                            .managed_agent_kind()
+                            .map(crate::detect::agent_label)
+                    })
+                })
+                .unwrap_or("agent");
+            let next = terminal
+                .and_then(|terminal| terminal.live_roster_instance_id())
+                .and_then(|id| app.agent_harness_overrides.get(id))
+                .map(String::as_str);
+            frame.render_widget(
+                Paragraph::new("Harness…").style(
+                    Style::default()
+                        .fg(app.palette.accent)
+                        .bg(app.palette.surface0),
+                ),
+                rect,
+            );
+            let rest = Rect::new(
+                rect.x + rect.width,
+                rect.y,
+                info.inner_rect.width.saturating_sub(rect.width),
+                1,
+            );
+            frame.render_widget(
+                Paragraph::new(format!(
+                    " running: {label} · next: {}",
+                    next.unwrap_or("profile default")
+                ))
+                .style(Style::default().fg(app.palette.overlay1)),
+                rest,
+            );
+        }
+    }
 }
 
 pub(crate) fn popup_pane_rects(app: &AppState, area: Rect) -> Option<(Rect, Rect)> {

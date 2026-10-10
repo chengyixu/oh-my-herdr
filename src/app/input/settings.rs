@@ -188,6 +188,142 @@ impl App {
         }
     }
 
+    pub(super) fn open_agent_instance_harness_menu(
+        &mut self,
+        ws_idx: usize,
+        pane_id: crate::layout::PaneId,
+    ) {
+        let identity = self
+            .state
+            .workspaces
+            .get(ws_idx)
+            .and_then(|ws| ws.pane_state(pane_id))
+            .and_then(|pane| self.state.terminals.get(&pane.attached_terminal_id))
+            .map(|terminal| {
+                (
+                    terminal.live_roster_instance_id().map(str::to_string),
+                    terminal.agent_name.clone(),
+                )
+            });
+        if let Err(err) = self.refresh_agent_registry_for_read() {
+            self.show_agent_profile_feedback(
+                crate::app::state::ToastKind::NeedsAttention,
+                "agent harness failed",
+                err.to_string(),
+            );
+            return;
+        }
+        // Display names are not ownership proof: a renamed managed agent's
+        // old name can be taken by another terminal. Only its bound id is exact.
+        let mut instance_id = identity.and_then(|(instance_id, _)| {
+            instance_id.filter(|id| self.agent_registry.roster.contains_key(id))
+        });
+        if instance_id.is_none() {
+            if let Some(target) = self.public_pane_id(ws_idx, pane_id) {
+                let response = self.dispatch_runtime_mutation(
+                    "tui.agent.harness.prepare",
+                    crate::api::schema::Method::AgentHarnessPrepare(
+                        crate::api::schema::AgentTarget { target },
+                    ),
+                );
+                instance_id = serde_json::from_str::<serde_json::Value>(&response)
+                    .ok()
+                    .and_then(|value| value["result"]["instance_id"].as_str().map(str::to_string));
+                if instance_id.is_none() {
+                    if let Ok(error) =
+                        serde_json::from_str::<crate::api::schema::ErrorResponse>(&response)
+                    {
+                        self.show_agent_profile_feedback(
+                            crate::app::state::ToastKind::NeedsAttention,
+                            "agent harness failed",
+                            error.error.message,
+                        );
+                        return;
+                    }
+                }
+            }
+        }
+        if let Some(instance_id) = instance_id {
+            self.state.context_menu = Some(crate::app::state::ContextMenuState {
+                kind: crate::app::state::ContextMenuKind::AgentHarness { instance_id },
+                x: self.state.view.terminal_area.x,
+                y: self.state.view.terminal_area.y,
+                list: crate::app::state::MenuListState::new(0),
+            });
+            self.state.mode = Mode::ContextMenu;
+        } else {
+            self.show_agent_profile_feedback(
+                crate::app::state::ToastKind::NeedsAttention,
+                "agent harness unavailable",
+                "This pane has no durable agent instance. Create and launch a saved profile first."
+                    .into(),
+            );
+        }
+    }
+
+    pub(super) fn open_live_agent_profile_form(
+        &mut self,
+        ws_idx: usize,
+        pane_id: crate::layout::PaneId,
+        harness_selected: bool,
+    ) {
+        if let Err(err) = self.refresh_agent_registry_for_read() {
+            self.show_agent_profile_feedback(
+                crate::app::state::ToastKind::NeedsAttention,
+                "agent profile failed",
+                format!("could not load native profiles: {err}"),
+            );
+            return;
+        }
+        let Some(terminal) = self
+            .state
+            .workspaces
+            .get(ws_idx)
+            .and_then(|ws| ws.pane_state(pane_id))
+            .and_then(|pane| self.state.terminals.get(&pane.attached_terminal_id))
+        else {
+            return;
+        };
+        let role = terminal
+            .live_roster_instance_id()
+            .and_then(|id| self.agent_registry.roster.get(id))
+            .map(|entry| entry.profile_id.clone())
+            .or_else(|| {
+                terminal
+                    .agent_name
+                    .as_deref()
+                    .and_then(|name| self.agent_registry.alive_instance(name))
+                    .map(|entry| entry.profile_id.clone())
+            })
+            .or_else(|| terminal.agent_name.clone());
+        let harness = terminal
+            .effective_agent_label()
+            .map(str::to_string)
+            .or_else(|| {
+                terminal
+                    .managed_agent_kind()
+                    .map(|agent| crate::detect::agent_label(agent).to_string())
+            })
+            .unwrap_or_else(|| "codex".into());
+        let cwd = self
+            .launch_cwd_for_pane_in_workspace(ws_idx, pane_id)
+            .unwrap_or_else(|| std::path::PathBuf::from("/"));
+        open_settings_at(&mut self.state, SettingsSection::Agents);
+        if let Some(role) = role.filter(|role| self.agent_registry.get(role).is_some()) {
+            self.open_agent_profile_edit_form(role);
+        } else {
+            self.open_agent_profile_create_form(harness);
+            if let Some(form) = self.state.settings.agent_profile_form.as_mut() {
+                form.native_cwd = cwd.display().to_string();
+            }
+        }
+        if harness_selected {
+            if let Some(form) = self.state.settings.agent_profile_form.as_mut() {
+                form.selected_field = usize::from(form.is_new());
+            }
+        }
+    }
+
     pub(super) fn save_agent_profile_form(&mut self) {
         let Some(form) = self.state.settings.agent_profile_form.take() else {
             return;
@@ -214,7 +350,10 @@ impl App {
                 self.show_agent_profile_feedback(
                     crate::app::state::ToastKind::UpdateInstalled,
                     "agent profile saved",
-                    format!("{} uses {}", profile.role, profile.harness),
+                    format!(
+                        "{} uses {} on next launch/revive; running agents unchanged",
+                        profile.role, profile.harness
+                    ),
                 );
             }
             Err(err) => {
@@ -725,10 +864,21 @@ fn update_agent_profile_form(state: &mut AppState, key: KeyEvent) -> Option<Sett
             move_agent_profile_instruction_cursor_vertical(form, true)
         }
         KeyCode::Up | KeyCode::BackTab => {
-            form.selected_field = form.selected_field.saturating_sub(1)
+            let field = form
+                .visible_fields()
+                .filter(|field| *field < form.selected_field)
+                .last();
+            if let Some(field) = field {
+                form.selected_field = field;
+            }
         }
         KeyCode::Down | KeyCode::Tab => {
-            form.selected_field = (form.selected_field + 1).min(form.field_count() - 1);
+            let field = form
+                .visible_fields()
+                .find(|field| *field > form.selected_field);
+            if let Some(field) = field {
+                form.selected_field = field;
+            }
         }
         KeyCode::Left => move_agent_profile_instruction_cursor(form, false),
         KeyCode::Right => move_agent_profile_instruction_cursor(form, true),
@@ -790,6 +940,9 @@ fn update_agent_profile_form(state: &mut AppState, key: KeyEvent) -> Option<Sett
 }
 
 fn agent_profile_form_field_mut(form: &mut AgentProfileForm) -> Option<&mut String> {
+    if !form.field_enabled(form.selected_field) {
+        return None;
+    }
     match (form.is_new(), form.selected_field) {
         (true, 0) => Some(&mut form.role),
         (true, 2) | (false, 1) => Some(&mut form.native_cwd),
@@ -981,7 +1134,8 @@ fn save_existing_agent_profile(
     form: &AgentProfileForm,
     role: String,
 ) -> Result<crate::api::schema::AgentProfileInfo, crate::app::agents::AgentProfileError> {
-    let allowlist = if form.allowlist.trim().is_empty() {
+    let capabilities = crate::agent_registry::native_harness_capabilities(&form.harness);
+    let allowlist = if !capabilities.tool_allowlist || form.allowlist.trim().is_empty() {
         None
     } else {
         Some(
@@ -1002,12 +1156,13 @@ fn save_existing_agent_profile(
         native_cwd: Some(form.native_cwd.clone()),
         model: (!form.model.trim().is_empty()).then(|| form.model.clone()),
         effort,
-        apikey_ref: (!form.apikey_ref.trim().is_empty()).then(|| form.apikey_ref.clone()),
+        apikey_ref: (capabilities.api_key_ref && !form.apikey_ref.trim().is_empty())
+            .then(|| form.apikey_ref.clone()),
         allowlist,
         clear_model: form.model.trim().is_empty(),
         clear_effort: form.effort.is_empty(),
-        clear_apikey_ref: form.apikey_ref.trim().is_empty(),
-        clear_allowlist: form.allowlist.trim().is_empty(),
+        clear_apikey_ref: !capabilities.api_key_ref || form.apikey_ref.trim().is_empty(),
+        clear_allowlist: !capabilities.tool_allowlist || form.allowlist.trim().is_empty(),
     })?;
     crate::agent_registry::replace_owned_instructions(&role, &form.instructions)
         .map_err(|err| crate::app::agents::AgentProfileError::PersistFailed(err.to_string()))?;
@@ -1231,26 +1386,19 @@ impl AppState {
     fn agent_profile_form_field_at(&self, row: u16) -> Option<usize> {
         let form = self.settings.agent_profile_form.as_ref()?;
         let area = self.settings_content_rect();
-        let (first_field_y, text_field_count, documents_y, document_y) = if form.is_new() {
-            (area.y + 3, 3, None, area.y + 6)
-        } else {
-            (
-                area.y + 4,
-                6,
-                Some(area.y + 10),
-                area.y + 11 + form.linked_markdown.len() as u16,
-            )
-        };
+        let first_field_y = area.y + if form.is_new() { 3 } else { 4 };
         let offset = row.checked_sub(first_field_y)? as usize;
-        if offset < text_field_count {
-            Some(offset)
-        } else if documents_y == Some(row) {
-            form.documents_field()
-        } else if row >= document_y && row < area.y.saturating_add(area.height) {
-            Some(form.instructions_field())
-        } else {
-            None
+        let fields = form
+            .visible_fields()
+            .filter(|field| *field != form.instructions_field())
+            .collect::<Vec<_>>();
+        if let Some(field) = fields.get(offset) {
+            return Some(*field);
         }
+        let document_y =
+            first_field_y + fields.len() as u16 + u16::from(!form.linked_markdown.is_empty());
+        (row >= document_y && row < area.y.saturating_add(area.height))
+            .then_some(form.instructions_field())
     }
 }
 
@@ -1260,6 +1408,364 @@ mod tests {
 
     use super::super::{app_for_mouse_test, mouse, state_with_workspaces};
     use super::*;
+
+    #[test]
+    fn preparing_a_pane_never_steals_an_occupied_generated_adoption_name() {
+        let mut app = app_for_mouse_test();
+        app.state.workspaces = vec![crate::workspace::Workspace::test_new("project")];
+        app.state.active = Some(0);
+        app.state.ensure_test_terminals();
+        let pane = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane]
+            .attached_terminal_id
+            .clone();
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .detected_agent = Some(crate::detect::Agent::Pi);
+        let generated = format!("pane-{}", terminal_id.as_str().trim_start_matches("term_"));
+        app.agent_registry
+            .register_or_get(&generated, std::env::temp_dir());
+        let occupied = app
+            .agent_registry
+            .roster_register(
+                &generated,
+                &generated,
+                &generated,
+                "",
+                Some("another:pane".into()),
+            )
+            .unwrap()
+            .instance_id
+            .clone();
+        app.open_agent_instance_harness_menu(0, pane);
+        let menu = app.state.context_menu.take().unwrap();
+        assert!(
+            matches!(menu.kind, crate::app::state::ContextMenuKind::AgentHarness { ref instance_id } if instance_id != &occupied)
+        );
+        assert_eq!(
+            app.agent_registry.roster[&occupied].last_pane.as_deref(),
+            Some("another:pane")
+        );
+    }
+
+    #[test]
+    fn legacy_name_collision_never_changes_another_panes_harness() {
+        let mut app = app_for_mouse_test();
+        app.state.workspaces = vec![crate::workspace::Workspace::test_new("project")];
+        app.state.active = Some(0);
+        let second_pane =
+            app.state.workspaces[0].test_split(ratatui::layout::Direction::Horizontal);
+        app.state.ensure_test_terminals();
+        let first_pane = app.state.workspaces[0].tabs[0].root_pane;
+        let first_id = app.state.workspaces[0].tabs[0].panes[&first_pane]
+            .attached_terminal_id
+            .clone();
+        let second_id = app.state.workspaces[0].tabs[0].panes[&second_pane]
+            .attached_terminal_id
+            .clone();
+        app.agent_registry
+            .register_or_get("reviewer", std::env::temp_dir());
+        let first = app
+            .agent_registry
+            .roster_register(
+                "reviewer",
+                "reviewer",
+                "reviewer",
+                "",
+                app.public_pane_id(0, first_pane),
+            )
+            .unwrap()
+            .instance_id
+            .clone();
+        app.state
+            .terminals
+            .get_mut(&first_id)
+            .unwrap()
+            .restore_managed_agent(
+                "other".into(),
+                crate::detect::Agent::Pi,
+                Some(first.clone()),
+            );
+        let terminal = app.state.terminals.get_mut(&second_id).unwrap();
+        terminal.detected_agent = Some(crate::detect::Agent::Pi);
+        terminal.set_agent_name("reviewer".into());
+        app.open_agent_instance_harness_menu(0, second_pane);
+        let menu = app.state.context_menu.take().unwrap();
+        app.apply_context_menu_action_via_api(menu, 3);
+        assert!(app.agent_registry.roster[&first].harness_override.is_none());
+        assert_ne!(
+            app.state.terminals[&second_id].live_roster_instance_id(),
+            Some(first.as_str())
+        );
+    }
+
+    #[test]
+    fn unmanaged_agent_pane_can_save_a_native_harness_without_restarting() {
+        let mut app = app_for_mouse_test();
+        app.state.workspaces = vec![crate::workspace::Workspace::test_new("external")];
+        app.state.active = Some(0);
+        app.state.ensure_test_terminals();
+        let pane = app.state.workspaces[0].tabs[0].root_pane;
+        let id = app.state.workspaces[0].tabs[0].panes[&pane]
+            .attached_terminal_id
+            .clone();
+        app.state.terminals.get_mut(&id).unwrap().detected_agent = Some(crate::detect::Agent::Pi);
+        app.open_agent_instance_harness_menu(0, pane);
+        let menu = app
+            .state
+            .context_menu
+            .take()
+            .expect("detected unmanaged pane needs the same harness affordance");
+        app.apply_context_menu_action_via_api(menu, 3);
+        let instance = app.state.terminals[&id]
+            .live_roster_instance_id()
+            .expect("saved pane setting gets durable identity");
+        assert_eq!(
+            app.agent_registry.roster[instance]
+                .harness_override
+                .as_deref(),
+            Some("claude")
+        );
+        assert_eq!(app.state.terminals[&id].effective_agent_label(), Some("pi"));
+        assert!(
+            app.state.terminals[&id].managed_agent_kind().is_none(),
+            "adoption must not claim a new process was launched"
+        );
+    }
+
+    #[test]
+    fn pane_harness_menu_saves_only_its_exact_instance_for_next_revival() {
+        let mut app = app_for_mouse_test();
+        app.state.workspaces = vec![crate::workspace::Workspace::test_new("project")];
+        app.state.active = Some(0);
+        app.state.ensure_test_terminals();
+        let pane = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane]
+            .attached_terminal_id
+            .clone();
+        app.agent_registry
+            .register_or_get("reviewer", std::env::temp_dir())
+            .harness = "pi".into();
+        let first = app
+            .agent_registry
+            .roster_register("reviewer", "reviewer", "reviewer", "", None)
+            .unwrap()
+            .instance_id
+            .clone();
+        let second = app
+            .agent_registry
+            .roster_register(
+                "reviewer-replica-1",
+                "reviewer",
+                "reviewer",
+                "-replica-1",
+                None,
+            )
+            .unwrap()
+            .instance_id
+            .clone();
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .restore_managed_agent(
+                "reviewer".into(),
+                crate::detect::Agent::Pi,
+                Some(first.clone()),
+            );
+        app.open_agent_instance_harness_menu(0, pane);
+        let menu = app.state.context_menu.take().unwrap();
+        assert!(
+            matches!(&menu.kind, crate::app::state::ContextMenuKind::AgentHarness { instance_id } if instance_id == &first)
+        );
+        app.apply_context_menu_action_via_api(menu, 3);
+        assert_eq!(
+            app.agent_registry.roster[&first]
+                .harness_override
+                .as_deref(),
+            Some("claude")
+        );
+        crate::ui::compute_view(&mut app.state, ratatui::layout::Rect::new(0, 0, 120, 40));
+        let mut screen =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 40)).unwrap();
+        screen
+            .draw(|frame| crate::ui::render(&app.state, frame))
+            .unwrap();
+        let text = screen
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(
+            text.contains("next: claude"),
+            "pane header must show the saved next-revival harness: {text}"
+        );
+        assert!(app.agent_registry.roster[&second]
+            .harness_override
+            .is_none());
+        assert_eq!(app.agent_registry.get("reviewer").unwrap().harness, "pi");
+        assert_eq!(
+            app.state.terminals[&terminal_id].managed_agent_kind(),
+            Some(crate::detect::Agent::Pi)
+        );
+        app.open_agent_instance_harness_menu(0, pane);
+        let menu = app.state.context_menu.take().unwrap();
+        app.apply_context_menu_action_via_api(menu, 0);
+        assert!(app.agent_registry.roster[&first].harness_override.is_none());
+    }
+
+    #[test]
+    fn profile_controls_skip_unsupported_fields_and_mouse_hits_match_visible_rows() {
+        let mut state = state_with_workspaces(&["test"]);
+        open_settings_at(&mut state, SettingsSection::Agents);
+        state.settings.agent_profile_form = Some(AgentProfileForm {
+            existing_role: Some("reviewer".into()),
+            role: "reviewer".into(),
+            harness: "codex".into(),
+            native_cwd: "/tmp".into(),
+            model: String::new(),
+            effort: String::new(),
+            apikey_ref: String::new(),
+            allowlist: String::new(),
+            additional_markdown: Vec::new(),
+            linked_markdown: Vec::new(),
+            instructions: String::new(),
+            instructions_cursor: 0,
+            instructions_scroll: 0,
+            selected_markdown: None,
+            pending_markdown_name: None,
+            selected_field: 4,
+        });
+        crate::ui::compute_view(&mut state, ratatui::layout::Rect::new(0, 0, 120, 50));
+        update_settings_state(
+            &mut state,
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::empty()),
+        );
+        assert_eq!(
+            state
+                .settings
+                .agent_profile_form
+                .as_ref()
+                .unwrap()
+                .selected_field,
+            6
+        );
+        let y = state.settings_content_rect().y;
+        assert_eq!(state.agent_profile_form_field_at(y + 9), Some(6));
+        assert_eq!(state.agent_profile_form_field_at(y + 10), Some(7));
+        let form = state.settings.agent_profile_form.as_mut().unwrap();
+        form.harness = "pi".into();
+        form.selected_field = 3;
+        update_settings_state(
+            &mut state,
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::empty()),
+        );
+        assert_eq!(
+            state
+                .settings
+                .agent_profile_form
+                .as_ref()
+                .unwrap()
+                .selected_field,
+            5
+        );
+        assert_eq!(state.agent_profile_form_field_at(y + 8), Some(5));
+    }
+
+    #[test]
+    fn live_agent_native_menu_edits_exact_replica_profile_and_persists_without_replacing_it() {
+        let _guard = crate::config::test_config_env_lock().lock().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "ohmyherdr-native-profile-menu-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let previous_home = std::env::var_os("XDG_CONFIG_HOME");
+        let previous_session = std::env::var_os(crate::session::SESSION_ENV_VAR);
+        std::env::set_var("XDG_CONFIG_HOME", &root);
+        std::env::set_var(crate::session::SESSION_ENV_VAR, "native-menu-test");
+        let mut app = app_for_mouse_test();
+        app.no_session = false;
+        app.create_profile(AgentProfileCreateParams {
+            role: "reviewer".into(),
+            harness: "pi".into(),
+            native_cwd: root.display().to_string(),
+            instructions: Some("# Keep my context".into()),
+        })
+        .unwrap();
+        app.state.workspaces = vec![crate::workspace::Workspace::test_new("project")];
+        app.state.active = Some(0);
+        app.state.ensure_test_terminals();
+        let tab = &app.state.workspaces[0].tabs[0];
+        let pane_id = tab.root_pane;
+        let id = tab.panes[&pane_id].attached_terminal_id.clone();
+        app.state.terminals.get_mut(&id).unwrap().detected_agent = Some(crate::detect::Agent::Pi);
+        let instance_id = app
+            .update_agent_registry(|registry| {
+                registry
+                    .roster_register(
+                        "reviewer-replica-1",
+                        "reviewer",
+                        "reviewer",
+                        "-replica-1",
+                        None,
+                    )
+                    .unwrap()
+                    .instance_id
+                    .clone()
+            })
+            .unwrap();
+        app.state
+            .terminals
+            .get_mut(&id)
+            .unwrap()
+            .restore_managed_agent(
+                "reviewer-replica-1".into(),
+                crate::detect::Agent::Pi,
+                Some(instance_id),
+            );
+        let menu = crate::app::state::ContextMenuState {
+            kind: crate::app::state::ContextMenuKind::Agent {
+                ws_idx: 0,
+                tab_idx: 0,
+                pane_id,
+            },
+            x: 0,
+            y: 0,
+            list: crate::app::state::MenuListState::new(0),
+        };
+        app.apply_context_menu_action_via_api(menu, 1);
+        assert_eq!(app.state.mode, Mode::Settings);
+        let form = app.state.settings.agent_profile_form.as_mut().unwrap();
+        assert_eq!(form.existing_role.as_deref(), Some("reviewer"));
+        assert_eq!(form.selected_field, 7);
+        form.harness = "claude".into();
+        app.save_agent_profile_form();
+        let restored = crate::agent_registry::load_for_read().unwrap();
+        assert_eq!(restored.get("reviewer").unwrap().harness, "claude");
+        assert_eq!(
+            crate::agent_registry::read_owned_instructions("reviewer").unwrap(),
+            "# Keep my context"
+        );
+        assert_eq!(app.state.terminals[&id].effective_agent_label(), Some("pi"));
+        assert_eq!(
+            app.state.terminals[&id].agent_name.as_deref(),
+            Some("reviewer-replica-1")
+        );
+        match previous_home {
+            Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+        match previous_session {
+            Some(value) => std::env::set_var(crate::session::SESSION_ENV_VAR, value),
+            None => std::env::remove_var(crate::session::SESSION_ENV_VAR),
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[test]
     fn settings_cancel_restores_previewed_theme_from_other_sections() {

@@ -89,6 +89,7 @@ fn agent_panel_sort_label(sort: AgentPanelSort) -> &'static str {
         AgentPanelSort::Spaces => "grouped",
         AgentPanelSort::Priority => "priority",
         AgentPanelSort::Agents => "agents",
+        AgentPanelSort::CurrentTab => "current tab",
     }
 }
 
@@ -155,6 +156,12 @@ fn agent_panel_entries_with_runtimes(
     }
 
     let mut entries = collect_agent_panel_entries_with_runtimes(app, terminal_runtimes);
+    if app.agent_panel_sort == AgentPanelSort::CurrentTab {
+        let current_tab = app
+            .active
+            .and_then(|ws_idx| app.workspaces.get(ws_idx).map(|ws| (ws_idx, ws.active_tab)));
+        entries.retain(|entry| current_tab == Some((entry.ws_idx, entry.tab_idx)));
+    }
     crate::app::agent_view::apply_agent_view(app, &mut entries);
     entries
 }
@@ -2258,6 +2265,42 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             agent_entry_height_in_body(&app, &entry, agent_panel_body_rect(panel, false).height),
             agent_panel_body_rect(panel, false).height
         );
+    }
+
+    #[test]
+    fn current_tab_agent_panel_excludes_other_tabs_and_workspaces() {
+        let config: crate::config::Config =
+            toml::from_str("[ui]\nagent_panel_sort = \"current-tab\"\n")
+                .expect("current-tab is a persistent view");
+        let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app =
+            crate::app::App::new(&config, true, None, rx, crate::api::EventHub::default()).state;
+        let mut workspace = Workspace::test_new("one");
+        workspace.test_add_tab(Some("other"));
+        app.workspaces = vec![workspace, Workspace::test_new("two")];
+        app.active = Some(0);
+        app.mode = crate::app::Mode::Terminal;
+        app.workspaces[0].active_tab = 0;
+        app.ensure_test_terminals();
+        for (ws_idx, tab_idx) in [(0, 0), (0, 1), (1, 0)] {
+            let tab = &app.workspaces[ws_idx].tabs[tab_idx];
+            let id = tab.panes[&tab.root_pane].attached_terminal_id.clone();
+            app.terminals.get_mut(&id).unwrap().detected_agent = Some(Agent::Pi);
+        }
+        let entries = agent_panel_entries(&app);
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| (entry.ws_idx, entry.tab_idx))
+                .collect::<Vec<_>>(),
+            vec![(0, 0)]
+        );
+        app.workspaces[0].active_tab = 1;
+        assert_eq!(agent_panel_entries(&app)[0].tab_idx, 1);
+        app.active = Some(1);
+        assert_eq!(agent_panel_entries(&app)[0].ws_idx, 1);
+        app.active = None;
+        assert!(agent_panel_entries(&app).is_empty());
     }
 
     #[test]

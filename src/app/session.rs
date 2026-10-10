@@ -12,6 +12,17 @@ enum SessionSaveJob {
 
 impl App {
     pub(super) fn sync_saved_agent_profiles(&mut self) {
+        self.state.agent_harness_overrides = self
+            .agent_registry
+            .roster
+            .values()
+            .filter_map(|entry| {
+                entry
+                    .harness_override
+                    .as_ref()
+                    .map(|harness| (entry.instance_id.clone(), harness.clone()))
+            })
+            .collect();
         self.state.saved_agent_profiles = self
             .agent_registry
             .profiles
@@ -206,6 +217,39 @@ impl App {
         self.state.mark_session_dirty();
         self.schedule_session_save();
         Ok(result)
+    }
+
+    pub(super) fn try_update_agent_registry<T, E>(
+        &mut self,
+        mutation: impl FnOnce(&mut crate::agent_registry::AgentRegistry) -> Result<T, E>,
+    ) -> std::io::Result<Result<T, E>> {
+        let (result, registry) = if self.no_session {
+            let mut registry = self.agent_registry.clone();
+            match mutation(&mut registry) {
+                Ok(result) => (result, registry),
+                Err(err) => return Ok(Err(err)),
+            }
+        } else {
+            if self.agent_registry.version > crate::agent_registry::REGISTRY_VERSION {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    format!(
+                        "agent registry version {} is newer than supported version {}",
+                        self.agent_registry.version,
+                        crate::agent_registry::REGISTRY_VERSION
+                    ),
+                ));
+            }
+            match crate::agent_registry::try_update(mutation)? {
+                Ok(committed) => committed,
+                Err(err) => return Ok(Err(err)),
+            }
+        };
+        self.agent_registry = registry;
+        self.sync_saved_agent_profiles();
+        self.state.mark_session_dirty();
+        self.schedule_session_save();
+        Ok(Ok(result))
     }
 
     pub(super) fn refresh_agent_registry_for_read(&mut self) -> std::io::Result<()> {

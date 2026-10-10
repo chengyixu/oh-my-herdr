@@ -108,11 +108,157 @@ impl App {
                     crate::agent_registry::AgentStatus::Unknown => AgentRosterStatus::Unknown,
                     crate::agent_registry::AgentStatus::Terminated => AgentRosterStatus::Terminated,
                 },
+                harness_override: entry.harness_override,
                 last_pane: entry.last_pane,
                 last_seen_at: entry.last_seen_at,
             })
             .collect();
         encode_success(id, ResponseResult::AgentRosterList { entries })
+    }
+
+    pub(super) fn handle_agent_harness_prepare(
+        &mut self,
+        id: String,
+        target: AgentTarget,
+    ) -> String {
+        let resolved = match self.resolve_agent_target(&target.target) {
+            Ok(target) => target,
+            Err(_) => return encode_error(id, "agent_not_found", "agent pane was not found"),
+        };
+        if let Err(err) = self.refresh_agent_registry_for_read() {
+            return encode_error(id, "agent_profile_load_failed", err.to_string());
+        }
+        let Some(terminal_id) = self.state.workspaces[resolved.ws_idx]
+            .terminal_id(resolved.pane_id)
+            .cloned()
+        else {
+            return encode_error(id, "agent_not_found", "agent terminal was not found");
+        };
+        let Some(terminal) = self.state.terminals.get(&terminal_id) else {
+            return encode_error(id, "agent_not_found", "agent terminal was not found");
+        };
+        if let Some(entry) = terminal
+            .live_roster_instance_id()
+            .and_then(|instance_id| self.agent_registry.roster.get(instance_id))
+        {
+            return encode_success(
+                id,
+                ResponseResult::AgentHarnessSet {
+                    instance_id: entry.instance_id.clone(),
+                    harness_override: entry.harness_override.clone(),
+                },
+            );
+        }
+        let harness = terminal
+            .effective_agent_label()
+            .or_else(|| {
+                terminal
+                    .managed_agent_kind()
+                    .map(crate::detect::agent_label)
+            })
+            .unwrap_or("codex")
+            .to_string();
+        if !matches!(harness.as_str(), "codex" | "pi" | "claude") {
+            return encode_error(
+                id,
+                "invalid_agent_kind",
+                "this harness does not support saved native launches",
+            );
+        }
+        let seed = format!("pane-{}", terminal_id.as_str().trim_start_matches("term_"));
+        let cwd = self
+            .launch_cwd_for_pane_in_workspace(resolved.ws_idx, resolved.pane_id)
+            .unwrap_or_else(|| std::path::PathBuf::from("/"));
+        let pane_address = self.public_pane_id(resolved.ws_idx, resolved.pane_id);
+        let entry = if self.no_session {
+            match self.update_agent_registry(|registry| {
+                registry.adopt_instance(&seed, cwd, &harness, pane_address)
+            }) {
+                Ok(Some(entry)) => entry,
+                Ok(None) => {
+                    return encode_error(
+                        id,
+                        "agent_instance_unavailable",
+                        "could not allocate exact agent identity",
+                    )
+                }
+                Err(err) => {
+                    return encode_error(id, "agent_profile_persist_failed", err.to_string())
+                }
+            }
+        } else {
+            if self.agent_registry.version > crate::agent_registry::REGISTRY_VERSION {
+                return encode_error(
+                    id,
+                    "agent_profile_persist_failed",
+                    "registry version is newer than supported",
+                );
+            }
+            match crate::agent_registry::adopt_terminal(&seed, cwd, &harness, pane_address) {
+                Ok((entry, registry)) => {
+                    self.agent_registry = registry;
+                    self.sync_saved_agent_profiles();
+                    entry
+                }
+                Err(err) => {
+                    return encode_error(id, "agent_profile_persist_failed", err.to_string())
+                }
+            }
+        };
+        if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
+            terminal
+                .bind_agent_roster_identity(entry.display_name.clone(), entry.instance_id.clone());
+        }
+        self.state.mark_session_dirty();
+        self.schedule_session_save();
+        encode_success(
+            id,
+            ResponseResult::AgentHarnessSet {
+                instance_id: entry.instance_id,
+                harness_override: entry.harness_override,
+            },
+        )
+    }
+
+    pub(super) fn handle_agent_harness_set(
+        &mut self,
+        id: String,
+        params: crate::api::schema::AgentHarnessSetParams,
+    ) -> String {
+        let harness = match params.harness {
+            Some(harness) if matches!(harness.as_str(), "codex" | "pi" | "claude") => Some(harness),
+            Some(_) => {
+                return encode_error(
+                    id,
+                    "invalid_agent_kind",
+                    "native harness must be codex, pi, or claude",
+                )
+            }
+            None => None,
+        };
+        let instance_id = params.instance_id;
+        let result = self.try_update_agent_registry(|registry| {
+            let Some(entry) = registry.roster.get_mut(&instance_id) else {
+                return Err(());
+            };
+            entry.harness_override = harness.clone();
+            Ok(())
+        });
+        match result {
+            Ok(Ok(())) => encode_success(
+                id,
+                ResponseResult::AgentHarnessSet {
+                    instance_id,
+                    harness_override: harness,
+                },
+            ),
+            Ok(Err(())) => encode_error(
+                id,
+                "agent_instance_not_found",
+                "exact agent instance was not found",
+            ),
+            Err(err) => encode_error(id, "agent_profile_persist_failed", err.to_string()),
+        }
     }
 
     pub(super) fn handle_agent_revive(&mut self, id: String, params: AgentReviveParams) -> String {

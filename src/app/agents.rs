@@ -261,6 +261,50 @@ fn validate_profile_md_canonical_path(
     Ok(path)
 }
 
+fn apply_instance_harness(profile: &mut crate::agent_registry::AgentProfile, harness: &str) {
+    if profile.harness != harness {
+        // Native auth/model/tool identifiers are not portable across harnesses.
+        // Use the selected harness's defaults, without altering the saved profile.
+        profile.model = None;
+        profile.effort = None;
+        profile.apikey_ref = None;
+        profile.allowlist = None;
+    }
+    profile.harness = harness.into();
+    let capabilities = crate::agent_registry::native_harness_capabilities(harness);
+    if !capabilities.api_key_ref {
+        profile.apikey_ref = None;
+    }
+    if !capabilities.tool_allowlist {
+        profile.allowlist = None;
+    }
+}
+
+fn validate_profile_native_settings(
+    registry: &crate::agent_registry::AgentRegistry,
+    role: &str,
+    harness: Option<&str>,
+    setting_api_key: bool,
+    setting_tools: bool,
+) -> Result<(), AgentProfileError> {
+    let harness = harness
+        .or_else(|| registry.get(role).map(|profile| profile.harness.as_str()))
+        .unwrap_or("codex");
+    let capabilities = crate::agent_registry::native_harness_capabilities(harness);
+    for (setting, requested, supported) in [
+        ("apikey_ref", setting_api_key, capabilities.api_key_ref),
+        ("allowlist", setting_tools, capabilities.tool_allowlist),
+    ] {
+        if requested && !supported {
+            return Err(AgentProfileError::SettingUnsupported(
+                setting.into(),
+                harness.into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Errors from editing a saved agent profile.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum AgentProfileError {
@@ -284,6 +328,7 @@ pub(super) enum AgentProfileError {
     InvalidModel,
     InvalidAllowlist,
     InvalidApiKeyRef,
+    SettingUnsupported(String, String),
     NativeCwdNotFound(String),
     NativeCwdNotDirectory(String),
     LoadFailed(String),
@@ -684,6 +729,8 @@ impl App {
         self.spawn_agent_with_revival(
             AgentSpawnParams {
                 role: entry.role.clone(),
+                // The locked reservation is the authority for the final
+                // harness; do not pin an earlier unlocked override here.
                 kind: None,
                 tab_id,
                 cwd_mode,
@@ -749,7 +796,15 @@ impl App {
         self.refresh_agent_registry_for_read().map_err(|err| {
             AgentSpawnError::SpawnFailed(format!("failed to load agent registry: {err}"))
         })?;
-        let preflight_profile = self.agent_registry.get(&params.role).cloned();
+        let mut preflight_profile = self.agent_registry.get(&params.role).cloned();
+        if let Some(harness) = revive_instance_id
+            .and_then(|id| self.agent_registry.roster.get(id))
+            .and_then(|entry| entry.harness_override.as_deref())
+        {
+            if let Some(profile) = preflight_profile.as_mut() {
+                apply_instance_harness(profile, harness);
+            }
+        }
         let preflight_kind = params.kind.as_deref().unwrap_or_else(|| {
             preflight_profile
                 .as_ref()
@@ -812,10 +867,14 @@ impl App {
                 local_agent_names,
             )?,
         };
-        let requested_kind = params
-            .kind
-            .as_deref()
-            .unwrap_or(reservation.profile.harness.as_str());
+        let requested_kind = if revive_instance_id.is_some() {
+            reservation.profile.harness.as_str()
+        } else {
+            params
+                .kind
+                .as_deref()
+                .unwrap_or(reservation.profile.harness.as_str())
+        };
         let Some(kind) = crate::detect::parse_agent_label(requested_kind) else {
             self.release_agent_spawn_reservation(&reservation.instance_id, reservation.revived);
             return Err(AgentSpawnError::InvalidKind);
@@ -1099,9 +1158,12 @@ impl App {
                     "archived agent identity is already in use".into(),
                 ));
             }
-            let profile = registry.get(&role).cloned().ok_or_else(|| {
+            let mut profile = registry.get(&role).cloned().ok_or_else(|| {
                 AgentSpawnError::SpawnFailed("saved agent profile not found".into())
             })?;
+            if let Some(harness) = entry.harness_override {
+                apply_instance_harness(&mut profile, &harness);
+            }
             if registry.roster_reserve_revival(&instance_id).is_none() {
                 return Err(AgentSpawnError::SpawnFailed(
                     "archived agent is not revivable".into(),
@@ -1561,13 +1623,29 @@ impl App {
             })
             .transpose()?;
         let seed_cwd = self.profile_seed_cwd()?;
-        self.update_agent_registry(move |registry| {
+        self.try_update_agent_registry(move |registry| {
+            // The registry was reloaded under the write lock. Never validate
+            // capabilities against an earlier unlocked/cache snapshot.
+            validate_profile_native_settings(
+                registry,
+                &params.role,
+                harness.as_deref(),
+                params.apikey_ref.is_some(),
+                params.allowlist.is_some(),
+            )?;
             let profile_is_new = registry.get(&params.role).is_none();
             let profile = registry.register_or_get(params.role, seed_cwd);
             if profile_is_new && native_cwd.is_none() {
                 profile.native_cwd_seeded = false;
             }
             if let Some(harness) = harness {
+                let capabilities = crate::agent_registry::native_harness_capabilities(&harness);
+                if !capabilities.api_key_ref {
+                    profile.apikey_ref = None;
+                }
+                if !capabilities.tool_allowlist {
+                    profile.allowlist = None;
+                }
                 profile.harness = harness;
             }
             if let Some(native_cwd) = native_cwd {
@@ -1595,9 +1673,9 @@ impl App {
                 profile.allowlist = None;
             }
 
-            profile_info(profile)
+            Ok(profile_info(profile))
         })
-        .map_err(|err| AgentProfileError::PersistFailed(err.to_string()))
+        .map_err(|err| AgentProfileError::PersistFailed(err.to_string()))?
     }
 
     fn profile_seed_cwd(&self) -> Result<std::path::PathBuf, AgentProfileError> {
@@ -1674,6 +1752,14 @@ impl App {
                 code: "invalid_agent_api_key_ref".into(),
                 message: "apikey_ref must use the env:NAME format".into(),
             },
+            AgentProfileError::SettingUnsupported(setting, harness) => {
+                crate::api::schema::ErrorBody {
+                    code: "agent_profile_setting_unsupported".into(),
+                    message: format!(
+                        "profile setting {setting} is not supported by agent kind {harness}"
+                    ),
+                }
+            }
             AgentProfileError::NativeCwdNotFound(path) => crate::api::schema::ErrorBody {
                 code: "agent_cwd_not_found".into(),
                 message: format!("agent working directory does not exist: {path}"),
@@ -2127,8 +2213,9 @@ pub(super) enum AgentSpawnError {
 mod tests {
     use super::{
         profile_launch_settings, profile_md_args, valid_agent_name,
-        validate_profile_md_canonical_path, AgentProfileEffort, AgentProfileError,
-        AgentProfileSetParams, AgentSpawnError, AgentSpawnOutcome, AgentStartError,
+        validate_profile_md_canonical_path, validate_profile_native_settings, AgentProfileEffort,
+        AgentProfileError, AgentProfileSetParams, AgentSpawnError, AgentSpawnOutcome,
+        AgentStartError,
     };
     use crate::{
         agent_registry::{AgentProfile, EffortLevel},
@@ -2319,6 +2406,11 @@ mod tests {
             .instance_id
             .clone();
         assert!(app.agent_registry.roster_terminate_instance(&instance_id));
+        app.agent_registry
+            .roster
+            .get_mut(&instance_id)
+            .unwrap()
+            .harness_override = Some("claude".into());
 
         let revived = match app.revive_agent(
             instance_id.clone(),
@@ -2332,6 +2424,8 @@ mod tests {
             Err(_) => panic!("revive should succeed"),
         };
         assert_eq!(revived.name, "reviewer-replica-1");
+        assert_eq!(revived.argv[0], "claude");
+        assert_eq!(app.agent_registry.get("reviewer").unwrap().harness, "codex");
         assert_eq!(app.agent_registry.roster.len(), 1);
         assert_eq!(
             app.agent_registry.roster[&instance_id].last_pane.as_deref(),
@@ -2659,6 +2753,227 @@ mod tests {
         assert_eq!(cleared.mds.len(), 1);
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn revival_uses_only_the_exact_instances_saved_harness_override() {
+        let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &Config::default(),
+            true,
+            None,
+            rx,
+            crate::api::EventHub::default(),
+        );
+        app.agent_registry
+            .register_or_get("reviewer", std::env::temp_dir())
+            .harness = "pi".into();
+        let first = app
+            .agent_registry
+            .roster_register("reviewer", "reviewer", "reviewer", "", None)
+            .unwrap()
+            .instance_id
+            .clone();
+        let second = app
+            .agent_registry
+            .roster_register(
+                "reviewer-replica-1",
+                "reviewer",
+                "reviewer",
+                "-replica-1",
+                None,
+            )
+            .unwrap()
+            .instance_id
+            .clone();
+        let mut stored = serde_json::to_value(&app.agent_registry).unwrap();
+        stored["roster"][&first]["harness_override"] = serde_json::json!("claude");
+        app.agent_registry = crate::agent_registry::parse(&stored.to_string());
+        app.agent_registry.roster_terminate_instance(&first);
+        app.agent_registry.roster_terminate_instance(&second);
+        let first_reservation = app
+            .reserve_agent_revival(&first, "reviewer", Vec::new())
+            .unwrap();
+        let second_reservation = app
+            .reserve_agent_revival(&second, "reviewer", Vec::new())
+            .unwrap();
+        assert_eq!(
+            first_reservation.profile.harness, "claude",
+            "exact instance override must survive native registry round-trip and affect revival"
+        );
+        assert_eq!(
+            second_reservation.profile.harness, "pi",
+            "sibling instance keeps profile default"
+        );
+        assert_eq!(app.agent_registry.get("reviewer").unwrap().harness, "pi");
+    }
+
+    #[test]
+    fn native_setting_transaction_revalidates_a_concurrent_harness_change() {
+        let _guard = crate::config::test_config_env_lock().lock().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "ohmyherdr-concurrent-native-settings-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let old_home = std::env::var_os("XDG_CONFIG_HOME");
+        let old_session = std::env::var_os(crate::session::SESSION_ENV_VAR);
+        std::env::set_var("XDG_CONFIG_HOME", &root);
+        std::env::set_var(crate::session::SESSION_ENV_VAR, "concurrent-settings");
+        for (new_harness, setting_key) in [("pi", true), ("codex", false)] {
+            crate::agent_registry::update(|registry| {
+                registry.register_or_get("reviewer", root.clone()).harness = "claude".into();
+            })
+            .unwrap();
+            let stale = crate::agent_registry::load_for_read().unwrap();
+            assert!(validate_profile_native_settings(
+                &stale,
+                "reviewer",
+                None,
+                setting_key,
+                !setting_key
+            )
+            .is_ok());
+            // The second server commits after the first server read/prepared its patch.
+            crate::agent_registry::update(|registry| {
+                registry.get_mut("reviewer").unwrap().harness = new_harness.into();
+            })
+            .unwrap();
+            let mut app = {
+                let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
+                App::new(
+                    &Config::default(),
+                    true,
+                    None,
+                    rx,
+                    crate::api::EventHub::default(),
+                )
+            };
+            app.no_session = false;
+            app.agent_registry = stale;
+            let path = crate::session::data_dir().join("agents.json");
+            let before = std::fs::read(&path).unwrap();
+            let result = app
+                .try_update_agent_registry(|registry| {
+                    validate_profile_native_settings(
+                        registry,
+                        "reviewer",
+                        None,
+                        setting_key,
+                        !setting_key,
+                    )?;
+                    let profile = registry.get_mut("reviewer").unwrap();
+                    if setting_key {
+                        profile.apikey_ref = Some("env:PATH".into());
+                    } else {
+                        profile.allowlist = Some(serde_json::json!({"tools":["Read"]}));
+                    }
+                    Ok::<_, AgentProfileError>(())
+                })
+                .unwrap();
+            assert!(matches!(
+                result,
+                Err(AgentProfileError::SettingUnsupported(_, _))
+            ));
+            assert_eq!(std::fs::read(&path).unwrap(), before);
+            assert_eq!(
+                crate::agent_registry::load_for_read()
+                    .unwrap()
+                    .get("reviewer")
+                    .unwrap()
+                    .harness,
+                new_harness
+            );
+        }
+        match old_home {
+            Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+        match old_session {
+            Some(value) => std::env::set_var(crate::session::SESSION_ENV_VAR, value),
+            None => std::env::remove_var(crate::session::SESSION_ENV_VAR),
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn switching_native_harness_clears_only_unsupported_launch_controls() {
+        let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &Config::default(),
+            true,
+            None,
+            rx,
+            crate::api::EventHub::default(),
+        );
+        let profile = app
+            .agent_registry
+            .register_or_get("reviewer", std::env::temp_dir());
+        profile.harness = "claude".into();
+        profile.apikey_ref = Some("env:PATH".into());
+        profile.allowlist = Some(serde_json::json!({"tools":["Read"]}));
+        profile.set_md("AGENTS.md", std::env::temp_dir().join("AGENTS.md"));
+        for (harness, key_present, allowlist_present) in
+            [("codex", true, false), ("pi", false, false)]
+        {
+            let info = app
+                .set_profile(AgentProfileSetParams {
+                    role: "reviewer".into(),
+                    harness: Some(harness.into()),
+                    native_cwd: None,
+                    model: None,
+                    effort: None,
+                    apikey_ref: None,
+                    allowlist: None,
+                    clear_model: false,
+                    clear_effort: false,
+                    clear_apikey_ref: false,
+                    clear_allowlist: false,
+                })
+                .unwrap();
+            assert_eq!(info.apikey_ref.is_some(), key_present);
+            assert_eq!(info.allowlist.is_some(), allowlist_present);
+            assert_eq!(info.mds.len(), 1);
+        }
+    }
+
+    #[test]
+    fn profile_set_rejects_unsupported_settings_before_saving() {
+        let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &Config::default(),
+            true,
+            None,
+            rx,
+            crate::api::EventHub::default(),
+        );
+        for (harness, apikey_ref, allowlist) in [
+            ("pi", Some("env:PATH".into()), None),
+            ("codex", None, Some(serde_json::json!({"tools":["Read"]}))),
+        ] {
+            let err = app
+                .set_profile(AgentProfileSetParams {
+                    role: "reviewer".into(),
+                    harness: Some(harness.into()),
+                    native_cwd: None,
+                    model: None,
+                    effort: None,
+                    apikey_ref,
+                    allowlist,
+                    clear_model: false,
+                    clear_effort: false,
+                    clear_apikey_ref: false,
+                    clear_allowlist: false,
+                })
+                .expect_err(
+                    "unsupported native settings must fail before they poison the saved profile",
+                );
+            assert_eq!(
+                app.agent_profile_error_body(err).code,
+                "agent_profile_setting_unsupported"
+            );
+            assert!(app.agent_registry.get("reviewer").is_none());
+        }
     }
 
     #[test]

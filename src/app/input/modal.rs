@@ -914,7 +914,21 @@ pub(super) fn apply_context_menu_action(
         ) => {
             leave_modal(state);
         }
-        (ContextMenuKind::AgentProfileSpawn { .. }, Some("Edit profile" | "Delete profile")) => {
+        (
+            ContextMenuKind::AgentProfileSpawn { .. },
+            Some("Native harness..." | "Edit profile" | "Delete profile"),
+        )
+        | (ContextMenuKind::Agent { .. }, Some("Native harness..." | "Edit profile"))
+        | (ContextMenuKind::AgentHarness { .. }, _) => {
+            leave_modal(state);
+        }
+        (
+            ContextMenuKind::Agent {
+                ws_idx, pane_id, ..
+            },
+            Some("Focus agent"),
+        ) => {
+            state.focus_pane_in_workspace(ws_idx, pane_id);
             leave_modal(state);
         }
         (
@@ -1345,13 +1359,71 @@ impl App {
                 self.spawn_agent_profile_in_workspace_via_api(role, Some(ws_idx), "agent");
                 leave_modal(&mut self.state);
             }
-            (ContextMenuKind::AgentProfileSpawn { role, .. }, Some("Edit profile")) => {
+            (
+                ContextMenuKind::AgentProfileSpawn { role, .. },
+                Some(action @ ("Native harness..." | "Edit profile")),
+            ) => {
                 leave_modal(&mut self.state);
                 crate::app::input::open_settings_at(
                     &mut self.state,
                     crate::app::state::SettingsSection::Agents,
                 );
                 self.open_agent_profile_edit_form(role);
+                if action == "Native harness..." {
+                    if let Some(form) = self.state.settings.agent_profile_form.as_mut() {
+                        form.selected_field = 0;
+                    }
+                }
+            }
+            (
+                ContextMenuKind::Agent {
+                    ws_idx, pane_id, ..
+                },
+                Some(action @ ("Native harness..." | "Edit profile")),
+            ) => {
+                leave_modal(&mut self.state);
+                if action == "Native harness..." {
+                    self.open_agent_instance_harness_menu(ws_idx, pane_id);
+                } else {
+                    self.open_live_agent_profile_form(ws_idx, pane_id, false);
+                }
+            }
+            (
+                ContextMenuKind::Agent {
+                    ws_idx, pane_id, ..
+                },
+                Some("Focus agent"),
+            ) => {
+                self.focus_pane_internal_via_api(ws_idx, pane_id);
+                leave_modal(&mut self.state);
+            }
+            (ContextMenuKind::AgentHarness { instance_id }, Some(choice)) => {
+                let harness = (choice != "Use profile harness").then(|| choice.to_string());
+                let response = self.dispatch_runtime_mutation(
+                    "tui.agent.harness.set",
+                    crate::api::schema::Method::AgentHarnessSet(
+                        crate::api::schema::AgentHarnessSetParams {
+                            instance_id,
+                            harness,
+                        },
+                    ),
+                );
+                let error =
+                    serde_json::from_str::<crate::api::schema::ErrorResponse>(&response).ok();
+                leave_modal(&mut self.state);
+                self.state.toast = Some(crate::app::state::ToastNotification {
+                    kind: if error.is_some() {
+                        crate::app::state::ToastKind::NeedsAttention
+                    } else {
+                        crate::app::state::ToastKind::UpdateInstalled
+                    },
+                    title: "agent harness".into(),
+                    context: error.map(|error| error.error.message).unwrap_or_else(|| {
+                        "Saved for this exact agent's next revival; running agent unchanged".into()
+                    }),
+                    position: None,
+                    target: None,
+                });
             }
             (ContextMenuKind::AgentProfileSpawn { role, .. }, Some("Delete profile")) => {
                 self.delete_agent_profile_via_api(role);

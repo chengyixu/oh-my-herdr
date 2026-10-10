@@ -340,6 +340,18 @@ status_indicators = "symbols"
 
 これらの記号は静的なので、このオプションでスピナーアニメーションが有効になることはありません。
 
+### サイドバー表示とネイティブ Agent プロファイル
+
+Agents 見出しの切替ボタンは **grouped**、**priority**、**agents**（保存済みプロファイル）、**current tab** の順に切り替わります。current tab はアクティブなタブだけを表示し、他のタブやスペースを除外します。選択は `ui.agent_panel_sort = "current-tab"` として保存されます。
+
+対応する各 Agent 端末の上に **Harness…** ボタンを表示し、端末内容を覆いません。**Native harness...** はそのインスタンスだけの次回復帰用に Codex、Pi、Claude、またはプロファイル既定値を保存します。同じプロファイルの他のインスタンスは変えません。手動起動の Agent にも再起動せずネイティブ登録簿の永続 ID を付与します。異なる harness への復帰では Markdown を維持し、認証・モデル・ツール設定は新しい harness の既定値を使います。
+
+実行中の Agent 行を右クリック、または保存済みプロファイルをクリックすると管理メニューが開きます。**Native harness...** はネイティブ harness 選択、**Edit profile** は文書編集を開きます。変更はセッションのネイティブ `agents.json` に永続化され、次回の起動・復帰に適用されます。実行中の Agent を置換せず、プロファイル所有の Markdown も維持します。名前のない Agent はこのメニューからプロファイルを作成できます。
+
+API キー参照は `env:NAME` を使い、エクスポート済み変数を Claude の `ANTHROPIC_API_KEY` または Codex の `OPENAI_API_KEY` に割り当てます。秘密値は保存しません。Pi はネイティブ provider 認証を使うため、この項目を非表示にします。Claude の **auto-approved tools** は `--allowedTools` に対応する権限承認設定で、サンドボックスではありません。Pi の **built-in tools** は `--tools` に対応し、拡張や MCP のセキュリティ境界ではありません。`{"tools":["read","write"]}` などの JSON と harness に適した名前を指定します。Codex にはこのツール設定がありません。未対応の harness への切替を保存すると、未対応設定は消去されます。
+
+`herdr update --check --all` または `ohmyherdr update --check --all` は両製品の独立した更新フィードを読み取り専用で報告します。インストール・設定変更・実行中サーバーへの接続は行いません。Ohmyherdr の更新は、レビュー済みの上流ソース統合と fork 機能を含む構築済みバイナリを使います。上流 Herdr の生バイナリで置き換えません。上流リリースは統合・テスト・Ohmyherdr として公開されるまでは参考情報です。
+
 ### サイドバーの行レイアウト
 
 展開されたデスクトップサイドバーでは、`rows` の各内側の配列が 1 行として描画されます。完全なデフォルトレイアウトは次のとおりです:

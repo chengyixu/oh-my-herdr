@@ -1239,6 +1239,25 @@
           ],
           "type": "object"
         },
+        "AgentHarnessSetParams": {
+          "description": "Persist one agent instance's next-revival harness without changing its\nrunning process, sibling instances, or saved profile. Null inherits profile.",
+          "properties": {
+            "harness": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "instance_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "instance_id",
+            "harness"
+          ],
+          "type": "object"
+        },
         "AgentProfileCreateParams": {
           "description": "Create a named profile with a session-owned `AGENTS.md` instruction file.\nThe file is injected by every supported native harness and remains attached\nto the profile if its harness is changed later.",
           "properties": {
@@ -5387,6 +5406,38 @@
         {
           "properties": {
             "method": {
+              "const": "agent.harness.prepare",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentTarget"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.harness.set",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentHarnessSetParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "agent.profile.create",
               "type": "string"
             },
@@ -6828,6 +6879,13 @@
           "properties": {
             "display_name": {
               "type": "string"
+            },
+            "harness_override": {
+              "description": "Saved harness for this exact instance's next revival; otherwise profile default.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "instance_id": {
               "type": "string"
@@ -9563,6 +9621,28 @@
               "required": [
                 "type",
                 "entries"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "harness_override": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "instance_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "agent_harness_set",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "instance_id"
               ],
               "type": "object"
             },

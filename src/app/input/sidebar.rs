@@ -599,6 +599,90 @@ mod tests {
     };
 
     #[test]
+    fn agent_scrollbar_right_click_never_opens_a_profile_or_live_agent_menu() {
+        for saved in [false, true] {
+            let mut app = app_for_mouse_test();
+            app.state.workspaces = (0..20).map(|_| Workspace::test_new("project")).collect();
+            app.state.active = Some(0);
+            app.state.mode = Mode::Terminal;
+            app.state.ensure_test_terminals();
+            for terminal in app.state.terminals.values_mut() {
+                terminal.detected_agent = Some(Agent::Pi);
+            }
+            if saved {
+                app.state.agent_panel_sort = AgentPanelSort::Agents;
+                app.state.saved_agent_profiles = (0..20)
+                    .map(|index| crate::app::state::SavedAgentProfile {
+                        role: format!("agent-{index}"),
+                        native_cwd: "/tmp".into(),
+                        harness: "pi".into(),
+                        replicas_assigned: 0,
+                    })
+                    .collect();
+            }
+            crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 24));
+            let panel = app.state.agent_panel_rect();
+            let body = crate::ui::agent_panel_body_rect(panel, true);
+            let scrollbar = (panel.x..panel.x + panel.width)
+                .find(|col| {
+                    app.state
+                        .agent_panel_scrollbar_target_at(*col, body.y)
+                        .is_some()
+                })
+                .expect("overflowing panel has scrollbar");
+            app.handle_mouse(mouse(
+                MouseEventKind::Down(MouseButton::Right),
+                scrollbar,
+                body.y,
+            ));
+            assert!(
+                app.state.context_menu.is_none(),
+                "scrollbar must not open a card menu (saved={saved})"
+            );
+            app.handle_mouse(mouse(
+                MouseEventKind::Down(MouseButton::Right),
+                body.x,
+                body.y,
+            ));
+            assert!(
+                app.state.context_menu.is_some(),
+                "card body must still open its menu"
+            );
+        }
+    }
+
+    #[test]
+    fn right_clicking_live_agent_opens_native_management_menu() {
+        let mut app = app_for_mouse_test();
+        app.state.workspaces = vec![Workspace::test_new("project")];
+        app.state.active = Some(0);
+        app.state.mode = Mode::Terminal;
+        app.state.ensure_test_terminals();
+        let tab = &app.state.workspaces[0].tabs[0];
+        let id = tab.panes[&tab.root_pane].attached_terminal_id.clone();
+        app.state
+            .terminals
+            .get_mut(&id)
+            .unwrap()
+            .restore_managed_agent(
+                "reviewer-replica-1".into(),
+                Agent::Pi,
+                Some("reviewer:1".into()),
+            );
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 24));
+        let body = crate::ui::agent_panel_body_rect(app.state.agent_panel_rect(), false);
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Right),
+            body.x,
+            body.y,
+        ));
+        let menu = app.state.context_menu.as_ref().expect("live agent menu");
+        assert!(menu.items().contains(&"Native harness..."));
+        assert!(menu.items().contains(&"Edit profile"));
+        assert_eq!(app.state.mode, Mode::ContextMenu);
+    }
+
+    #[test]
     fn saved_profile_row_resolves_to_a_spawn_target() {
         let mut state = AppState::test_new();
         state.saved_agent_profiles = vec![crate::app::state::SavedAgentProfile {
@@ -651,6 +735,7 @@ mod tests {
             vec![
                 "Use space cwd",
                 "Use agent native cwd",
+                "Native harness...",
                 "Edit profile",
                 "Delete profile",
             ]
@@ -998,6 +1083,7 @@ mod tests {
         for expected in [
             AgentPanelSort::Priority,
             AgentPanelSort::Agents,
+            AgentPanelSort::CurrentTab,
             AgentPanelSort::Spaces,
         ] {
             let toggle =

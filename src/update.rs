@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 #[cfg(not(windows))]
 use interprocess::local_socket::traits::Stream as _;
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 
 const STABLE_UPDATE_MANIFEST_URL: &str = "https://herdr.dev/latest.json";
 const PREVIEW_UPDATE_MANIFEST_URL: &str = "https://herdr.dev/preview.json";
@@ -1138,6 +1138,8 @@ fn target_client_protocol_server_is_running() -> Result<bool, String> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct SelfUpdateOptions {
     pub(crate) live_handoff: bool,
+    pub(crate) check_only: bool,
+    pub(crate) all_products: bool,
 }
 
 pub(crate) fn parse_self_update_args(args: &[String]) -> Result<SelfUpdateOptions, String> {
@@ -1145,16 +1147,112 @@ pub(crate) fn parse_self_update_args(args: &[String]) -> Result<SelfUpdateOption
     for arg in args {
         match arg.as_str() {
             "--handoff" => options.live_handoff = true,
+            "--check" => options.check_only = true,
+            "--all" => options.all_products = true,
             "--help" | "-h" => {
                 return Err(format!(
-                    "usage: {} update [--handoff]",
+                    "usage: {} update [--handoff] | --check [--all]",
                     crate::config::product_name()
                 ));
             }
             _ => return Err(format!("unknown update option: {arg}")),
         }
     }
+    if options.all_products && !options.check_only {
+        return Err("--all requires --check; product installs remain separate".into());
+    }
+    if options.check_only && options.live_handoff {
+        return Err("--check cannot be combined with --handoff".into());
+    }
     Ok(options)
+}
+
+#[derive(Debug, Serialize)]
+struct UpdateCheckReport {
+    product: &'static str,
+    current_version: Option<String>,
+    latest_version: Option<String>,
+    status: &'static str,
+    install_command: &'static str,
+    manifest_url: &'static str,
+    error: Option<String>,
+}
+
+fn stable_update_check_report(
+    manifest: &UpdateManifest,
+    is_ohmyherdr: bool,
+    current: Option<&Version>,
+    installed_is_preview: bool,
+) -> Result<(String, &'static str), String> {
+    let latest = Version::parse(&manifest.version)
+        .ok_or_else(|| format!("invalid version in update manifest: {}", manifest.version))?;
+    let status = match current {
+        Some(current) if stable_channel_should_install(&latest, current, installed_is_preview) => {
+            "available"
+        }
+        Some(_) => "up_to_date",
+        None => "other_product",
+    };
+    Ok((stable_release_identity(&latest, is_ohmyherdr), status))
+}
+
+/// Read-only feed checks: no downloads, config writes, release-note writes,
+/// server discovery, stops or handoffs. Another product is reported separately.
+fn check_update_products(all_products: bool) -> Vec<UpdateCheckReport> {
+    let installed_is_ohmyherdr = crate::build_info::is_ohmyherdr();
+    let products = if all_products {
+        vec![false, true]
+    } else {
+        vec![installed_is_ohmyherdr]
+    };
+    products
+        .into_iter()
+        .map(|is_ohmyherdr| {
+            let is_current = is_ohmyherdr == installed_is_ohmyherdr;
+            let manifest_url =
+                if is_current && UpdateChannel::configured() == UpdateChannel::Preview {
+                    PREVIEW_UPDATE_MANIFEST_URL
+                } else {
+                    stable_update_manifest_url_for_product(is_ohmyherdr)
+                };
+            let result = if manifest_url == PREVIEW_UPDATE_MANIFEST_URL {
+                fetch_preview_manifest().and_then(|manifest| {
+                    release_info_from_preview_manifest(&manifest).map(|release| match release {
+                        Some(release) => (release.identity, "available"),
+                        None => (crate::build_info::version(), "up_to_date"),
+                    })
+                })
+            } else {
+                fetch_json_manifest::<UpdateManifest>(manifest_url).and_then(|manifest| {
+                    stable_update_check_report(
+                        &manifest,
+                        is_ohmyherdr,
+                        is_current.then(Version::current).as_ref(),
+                        is_current && crate::build_info::is_preview(),
+                    )
+                })
+            };
+            let (latest_version, status, error) = match result {
+                Ok((version, status)) => (Some(version), status, None),
+                Err(error) => (None, "error", Some(error)),
+            };
+            UpdateCheckReport {
+                product: if is_ohmyherdr { "ohmyherdr" } else { "herdr" },
+                current_version: is_current.then(crate::build_info::version),
+                latest_version,
+                status,
+                install_command: if is_current {
+                    update_install_command()
+                } else if is_ohmyherdr {
+                    OHMYHERDR_UPDATE_COMMAND
+                } else {
+                    HERDR_UPDATE_COMMAND
+                },
+                manifest_url,
+                error,
+            }
+        })
+        .collect()
 }
 
 #[cfg(not(windows))]
@@ -2161,6 +2259,14 @@ fn homebrew_cellar_keg_root(path: &Path) -> Option<PathBuf> {
 
 /// Manual self-update command (`herdr update`).
 pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
+    if options.check_only {
+        let reports = check_update_products(options.all_products);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&reports).map_err(|err| err.to_string())?
+        );
+        return Ok(Version::current());
+    }
     let channel = UpdateChannel::configured();
 
     if is_homebrew_managed_install() {
@@ -2877,16 +2983,83 @@ mod tests {
     }
 
     #[test]
+    fn stable_update_check_reports_preview_migration_at_equal_or_lower_base() {
+        let current = Version::parse("0.9.3").unwrap();
+        for latest in ["0.9.3", "0.9.2"] {
+            let manifest: UpdateManifest = serde_json::from_value(serde_json::json!({
+                "version": latest, "notes": "stable", "assets": {},
+            }))
+            .unwrap();
+            let status = stable_update_check_report(&manifest, false, Some(&current), true)
+                .unwrap()
+                .1;
+            assert_eq!(
+                status, "available",
+                "preview-to-stable migration must agree with installer"
+            );
+        }
+    }
+
+    #[test]
+    fn dual_product_check_keeps_version_comparisons_and_identities_separate() {
+        let manifest: UpdateManifest = serde_json::from_value(serde_json::json!({
+            "version":"0.9.3", "notes":"upstream", "assets":{},
+        }))
+        .unwrap();
+        assert_eq!(
+            stable_update_check_report(&manifest, false, None, false).unwrap(),
+            ("0.9.3".into(), "other_product")
+        );
+        assert_eq!(
+            stable_update_check_report(
+                &manifest,
+                true,
+                Some(&Version::parse("0.8.5").unwrap()),
+                false
+            )
+            .unwrap(),
+            ("0.9.3-ohmyherdr.0.9.3".into(), "available")
+        );
+        assert_eq!(
+            stable_update_check_report(
+                &manifest,
+                true,
+                Some(&Version::parse("0.9.3").unwrap()),
+                false
+            )
+            .unwrap()
+            .1,
+            "up_to_date"
+        );
+    }
+
+    #[test]
+    fn update_check_can_report_both_products_without_installing() {
+        let options = parse_self_update_args(&["--check".into(), "--all".into()])
+            .expect("read-only dual-product checks are supported");
+        assert!(!options.live_handoff);
+        assert!(
+            parse_self_update_args(&["--all".into()]).is_err(),
+            "checking both products must never silently install another product"
+        );
+        assert!(
+            parse_self_update_args(&["--check".into(), "--handoff".into()]).is_err(),
+            "read-only check must not hand off a running runtime"
+        );
+    }
+
+    #[test]
     fn self_update_args_gate_live_handoff() {
         assert_eq!(
             parse_self_update_args(&[]).unwrap(),
-            SelfUpdateOptions {
-                live_handoff: false
-            }
+            SelfUpdateOptions::default()
         );
         assert_eq!(
             parse_self_update_args(&["--handoff".to_string()]).unwrap(),
-            SelfUpdateOptions { live_handoff: true }
+            SelfUpdateOptions {
+                live_handoff: true,
+                ..SelfUpdateOptions::default()
+            }
         );
         assert_eq!(
             parse_self_update_args(&["--unknown".to_string()]).unwrap_err(),
@@ -2987,9 +3160,7 @@ mod tests {
         let decisions = confirm_running_server_update_action(
             vec![plan],
             &release,
-            SelfUpdateOptions {
-                live_handoff: false,
-            },
+            SelfUpdateOptions::default(),
         )
         .unwrap();
 
@@ -3195,9 +3366,7 @@ mod tests {
         let decisions = confirm_running_server_update_action(
             vec![plan],
             &release,
-            SelfUpdateOptions {
-                live_handoff: false,
-            },
+            SelfUpdateOptions::default(),
         )
         .unwrap();
         let complete = prompt_to_complete_plain_update(&decisions, &release).unwrap();

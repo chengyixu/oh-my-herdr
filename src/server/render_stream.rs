@@ -625,6 +625,27 @@ mod render_scale_benchmark {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    #[ignore = "manual agent pane header scaling profile"]
+    async fn agent_pane_header_render_scale_profile() {
+        fn agents(count: usize) -> AppState {
+            let mut app = app_with_active_panes(count);
+            app.ensure_test_terminals();
+            for terminal in app.terminals.values_mut() {
+                terminal.detected_agent = Some(crate::detect::Agent::Pi);
+            }
+            app
+        }
+        print_profiles(
+            "shell panes without agent header",
+            profile_cardinalities(app_with_active_panes),
+        );
+        print_profiles(
+            "agent panes with native harness header",
+            profile_cardinalities(agents),
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     #[ignore = "manual full-render scaling profile"]
     async fn render_scale_profile() {
         print_profiles(

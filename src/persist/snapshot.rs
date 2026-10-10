@@ -336,9 +336,7 @@ fn capture_tab(
                     .map(|agent| crate::detect::agent_label(agent).to_string());
                 (
                     terminal.agent_name.clone(),
-                    managed_agent_kind
-                        .as_ref()
-                        .and_then(|_| terminal.live_roster_instance_id().map(ToOwned::to_owned)),
+                    terminal.live_roster_instance_id().map(ToOwned::to_owned),
                     managed_agent_kind,
                 )
             })

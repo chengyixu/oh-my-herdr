@@ -14,6 +14,145 @@ use support::{
     unregister_spawned_herdr_pid,
 };
 
+#[test]
+fn pane_harness_override_persists_without_touching_the_running_agent() {
+    fn request(path: &Path, value: serde_json::Value) -> serde_json::Value {
+        send_request(path, &value.to_string())
+    }
+    fn assert_ok(value: serde_json::Value) {
+        assert!(value.get("error").is_none(), "{value}");
+    }
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let socket = runtime_dir.join("herdr.sock");
+    let spawned = spawn_herdr(&config_home, &runtime_dir, &socket);
+    wait_for_socket(&socket, Duration::from_secs(10));
+    register_runtime_dir(&runtime_dir);
+    let created = request(
+        &socket,
+        serde_json::json!({"id":"create","method":"workspace.create","params":{"cwd":base,"focus":true}}),
+    );
+    let pane_id = created["result"]["root_pane"]["pane_id"].as_str().unwrap();
+    assert_ok(request(
+        &socket,
+        serde_json::json!({"id":"report","method":"pane.report_agent","params":{"pane_id":pane_id,"agent":"pi","state":"idle","source":"test"}}),
+    ));
+    let prepared = request(
+        &socket,
+        serde_json::json!({"id":"prepare","method":"agent.harness.prepare","params":{"target":pane_id}}),
+    );
+    assert_ok(prepared.clone());
+    let instance = prepared["result"]["instance_id"].as_str().unwrap();
+    let before = request(
+        &socket,
+        serde_json::json!({"id":"before","method":"agent.get","params":{"target":pane_id}}),
+    );
+    let rejected = request(
+        &socket,
+        serde_json::json!({"id":"invalid","method":"agent.harness.set","params":{"instance_id":instance,"harness":"unknown"}}),
+    );
+    assert_eq!(rejected["error"]["code"], "invalid_agent_kind");
+    assert_ok(request(
+        &socket,
+        serde_json::json!({"id":"set","method":"agent.harness.set","params":{"instance_id":instance,"harness":"claude"}}),
+    ));
+    let roster = request(
+        &socket,
+        serde_json::json!({"id":"roster","method":"agent.roster.list","params":{}}),
+    );
+    assert!(roster["result"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|entry| entry["instance_id"] == instance && entry["harness_override"] == "claude"));
+    let after = request(
+        &socket,
+        serde_json::json!({"id":"after","method":"agent.get","params":{"target":pane_id}}),
+    );
+    assert_eq!(
+        after["result"]["agent"]["terminal_id"],
+        before["result"]["agent"]["terminal_id"]
+    );
+    assert_eq!(after["result"]["agent"]["agent"], "pi");
+    assert_ok(request(
+        &socket,
+        serde_json::json!({"id":"clear","method":"agent.harness.set","params":{"instance_id":instance,"harness":null}}),
+    ));
+    drop(spawned);
+    cleanup_test_base(&base);
+}
+
+#[test]
+fn dual_product_update_check_is_read_only_even_with_runtime_socket_overrides() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::net::UnixListener;
+    let base = unique_test_dir();
+    let bin = base.join("bin");
+    let config = base.join("config.toml");
+    fs::create_dir_all(&bin).unwrap();
+    fs::write(
+        &config,
+        "onboarding = false\n[update]\nchannel = \"stable\"\n",
+    )
+    .unwrap();
+    let original_config = fs::read(&config).unwrap();
+    let curl = bin.join("curl");
+    fs::write(
+        &curl,
+        "#!/bin/sh\nprintf '%s\\n' '{\"version\":\"9.9.9\",\"notes\":\"fixture\",\"assets\":{}}'\n",
+    )
+    .unwrap();
+    fs::set_permissions(&curl, fs::Permissions::from_mode(0o755)).unwrap();
+    let socket = base.join("runtime.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_herdr"))
+        .args(["update", "--check", "--all"])
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                bin.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
+        .env("HERDR_CONFIG_PATH", &config)
+        .env("XDG_CONFIG_HOME", base.join("config"))
+        .env("XDG_STATE_HOME", base.join("state"))
+        .env("HERDR_SOCKET_PATH", &socket)
+        .env("HERDR_CLIENT_SOCKET_PATH", &socket)
+        .env("HERDR_ENV", "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let reports: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(reports[0]["product"], "herdr");
+    assert_eq!(reports[1]["product"], "ohmyherdr");
+    assert_eq!(reports[0]["latest_version"], "9.9.9");
+    assert_eq!(reports[1]["latest_version"], "9.9.9-ohmyherdr.9.9.9");
+    assert!(
+        matches!(listener.accept(), Err(err) if err.kind() == std::io::ErrorKind::WouldBlock),
+        "read-only check must not contact either runtime socket"
+    );
+    assert_eq!(fs::read(&config).unwrap(), original_config);
+    assert!(
+        !base.join("state").exists(),
+        "no release notes/state may be written"
+    );
+    assert!(
+        !base.join("config").exists(),
+        "no product configuration may be written"
+    );
+    drop(listener);
+    fs::remove_dir_all(base).unwrap();
+}
+
 fn unique_test_dir() -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
