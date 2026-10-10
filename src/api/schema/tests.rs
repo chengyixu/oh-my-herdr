@@ -50,6 +50,7 @@ fn request_uses_dot_method_names() {
     let request = Request {
         id: "req_1".into(),
         method: Method::WorkspaceCreate(WorkspaceCreateParams {
+            source_workspace_id: None,
             cwd: Some("/tmp".into()),
             focus: true,
             label: Some("api".into()),
@@ -132,6 +133,7 @@ fn agent_start_and_prompt_requests_round_trip() {
             wait: Some(AgentPromptWaitOptions {
                 until: vec![AgentStatus::Idle, AgentStatus::Done],
                 timeout_ms: Some(120_000),
+                submission_deadline: None,
             }),
         }),
     };
@@ -382,8 +384,7 @@ fn generated_protocol_schema_artifact_is_current() {
         )
     });
     assert_eq!(
-        expected,
-        actual,
+        expected, actual,
         "generated API schema artifact is stale; run `HERDR_UPDATE_API_SCHEMA=1 just test-one generated_protocol_schema_artifact_is_current`"
     );
 }
@@ -453,6 +454,54 @@ fn request_round_trips_for_agent_explain() {
     assert_eq!(json["method"], "agent.explain");
     let restored: Request = serde_json::from_value(json).unwrap();
     assert_eq!(restored, request);
+}
+
+#[test]
+fn integration_list_request_and_response_round_trip() {
+    let request = Request {
+        id: "req_integrations".into(),
+        method: Method::IntegrationList(EmptyParams::default()),
+    };
+    let json = serde_json::to_value(&request).unwrap();
+    assert_eq!(json["method"], "integration.list");
+    assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+
+    let response = SuccessResponse {
+        id: "req_integrations".into(),
+        result: ResponseResult::IntegrationList {
+            integrations: vec![IntegrationInfo {
+                target: IntegrationTarget::Codex,
+                label: "codex".into(),
+                command: "codex".into(),
+                available: true,
+                state: IntegrationState::Outdated,
+            }],
+        },
+    };
+    let json = serde_json::to_value(&response).unwrap();
+    assert_eq!(json["result"]["type"], "integration_list");
+    assert_eq!(json["result"]["integrations"][0]["state"], "outdated");
+    assert_eq!(
+        serde_json::from_value::<SuccessResponse>(json).unwrap(),
+        response
+    );
+}
+
+#[test]
+fn command_invoke_request_round_trips_without_command_text() {
+    let request = Request {
+        id: "req_command".into(),
+        method: Method::CommandInvoke(CommandInvokeParams {
+            command_id: "cmd_0123456789abcdef0123456789abcdef".into(),
+            workspace_id: Some("w1".into()),
+            tab_id: Some("w1:t1".into()),
+            pane_id: Some("w1:p1".into()),
+            selection: None,
+        }),
+    };
+    let json = serde_json::to_value(&request).unwrap();
+    assert_eq!(json["method"], "command.invoke");
+    assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
 }
 
 #[test]
@@ -842,6 +891,12 @@ fn scroll_changed_subscription_event_round_trips() {
 }
 
 #[test]
+fn agent_status_request_values_remain_strict() {
+    assert!(serde_json::from_str::<AgentStatus>(r#""working""#).is_ok());
+    assert!(serde_json::from_str::<AgentStatus>(r#""future_status""#).is_err());
+}
+
+#[test]
 fn success_response_round_trips() {
     let response = SuccessResponse {
         id: "req_1".into(),
@@ -851,6 +906,10 @@ fn success_response_round_trips() {
             capabilities: Some(ServerCapabilities {
                 live_handoff: true,
                 detached_server_daemon: true,
+                endpoint_protocol_generation: Some(1),
+                surface_interest: true,
+                health_check: true,
+                ssh_agent_registration: false,
             }),
         },
     };
@@ -903,10 +962,12 @@ fn worktree_request_and_response_round_trip() {
             branch: Some("worktree/api".into()),
             base: Some("HEAD".into()),
             focus: true,
+            trust_repository: true,
             ..WorktreeCreateParams::default()
         }),
     };
     let json = serde_json::to_string(&request).unwrap();
+    assert!(json.contains("\"trust_repository\":true"));
     let restored: Request = serde_json::from_str(&json).unwrap();
     assert_eq!(restored, request);
 
@@ -948,6 +1009,7 @@ fn worktree_request_and_response_round_trip() {
                 focused: true,
                 cwd: Some("/worktrees/herdr/worktree-api".into()),
                 foreground_cwd: None,
+                restore_error: None,
                 label: None,
                 agent: None,
                 title: None,
@@ -1376,6 +1438,7 @@ fn create_response_round_trips_with_root_pane() {
                 focused: false,
                 cwd: Some("/tmp/review".into()),
                 foreground_cwd: None,
+                restore_error: None,
                 label: None,
                 agent: None,
                 title: None,
@@ -1442,6 +1505,32 @@ fn event_wait_parses_typed_match() {
             agent_status: AgentStatus::Done,
         }
     );
+}
+
+#[test]
+fn pane_link_activate_round_trips() {
+    let request = Request {
+        id: "req_pane_link".into(),
+        method: Method::PaneLinkActivate(PaneLinkActivateParams {
+            pane_id: "w1:p1".into(),
+            viewport_row: 3,
+            col: 7,
+            content_revision: Some(42),
+            offset_from_bottom: Some(5),
+        }),
+    };
+    let json = serde_json::to_value(&request).unwrap();
+    assert_eq!(json["method"], "pane.link.activate");
+    let restored: Request = serde_json::from_value(json).unwrap();
+    assert_eq!(restored, request);
+
+    let response = ResponseResult::PaneLinkActivated {
+        url: Some("https://example.test".into()),
+        handled: false,
+    };
+    let json = serde_json::to_string(&response).unwrap();
+    let restored: ResponseResult = serde_json::from_str(&json).unwrap();
+    assert_eq!(restored, response);
 }
 
 #[test]
@@ -1528,4 +1617,28 @@ fn popup_close_request_round_trips() {
 
     assert_eq!(json["method"], "popup.close");
     assert_eq!(json["params"], serde_json::json!({}));
+}
+
+#[test]
+fn pane_link_resolve_round_trips() {
+    let request: Request = serde_json::from_value(serde_json::json!({
+        "id": "hover", "method": "pane.link.resolve",
+        "params": {"pane_id": "pane-1", "viewport_row": 2, "col": 3}
+    }))
+    .unwrap();
+    assert!(matches!(request.method, Method::PaneLinkResolve(_)));
+    let result = ResponseResult::PaneLinkResolved {
+        regions: vec![PaneLinkRegion {
+            row: 2,
+            start_col: 3,
+            end_col: 9,
+        }],
+    };
+    let json = serde_json::to_value(&result).unwrap();
+    assert_eq!(json["type"], "pane_link_resolved");
+    assert_eq!(json["regions"][0]["end_col"], 9);
+    assert_eq!(
+        serde_json::from_value::<ResponseResult>(json).unwrap(),
+        result
+    );
 }

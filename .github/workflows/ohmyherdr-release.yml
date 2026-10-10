@@ -49,16 +49,16 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/Library/Caches/Homebrew/downloads
-          key: homebrew-zig-0.15-${{ runner.os }}-${{ runner.arch }}
+          key: homebrew-zig-0.16-${{ runner.os }}-${{ runner.arch }}
           restore-keys: |
-            homebrew-zig-0.15-${{ runner.os }}-
+            homebrew-zig-0.16-${{ runner.os }}-
 
       - name: Install build tools
         shell: bash
         run: |
-          HOMEBREW_NO_AUTO_UPDATE=1 brew install cmake ninja zig@0.15
-          echo "$(brew --prefix zig@0.15)/bin" >> "$GITHUB_PATH"
-          "$(brew --prefix zig@0.15)/bin/zig" version
+          HOMEBREW_NO_AUTO_UPDATE=1 brew install cmake ninja zig
+          echo "$(brew --prefix zig)/bin" >> "$GITHUB_PATH"
+          test "$("$(brew --prefix zig)/bin/zig" version)" = "0.16.0"
 
       - name: Build product artifact
         shell: bash
@@ -81,11 +81,13 @@ jobs:
           asset="ohmyherdr-macos-aarch64"
           checksum="$(shasum -a 256 "$asset" | awk '{print $1}')"
           protocol="$(sed -n 's/pub const PROTOCOL_VERSION: u32 = \([0-9][0-9]*\);/\1/p' src/protocol/wire.rs)"
+          endpoint_generation="$(sed -n 's/pub const ENDPOINT_PROTOCOL_GENERATION: u32 = \([0-9][0-9]*\);/\1/p' src/protocol/endpoint.rs)"
           url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/${asset}"
           cat > ohmyherdr-latest.json <<EOF
           {
             "version": "${version}",
             "protocol": ${protocol},
+            "endpoint_generation": ${endpoint_generation},
             "notes": "### Changed\\n- Native agent profiles now own editable AGENTS.md and named Markdown documents.\\n- Spaces can select their own working directory when spawning a profile.\\n- The OhMyHerdr updater is isolated from stable Herdr.",
             "assets": {
               "macos-aarch64": {

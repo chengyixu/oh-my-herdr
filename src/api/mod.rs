@@ -7,8 +7,8 @@ mod subscriptions;
 mod wait;
 
 pub use event_hub::EventHub;
-pub(crate) use server::start_server_with_stop_control;
-pub use server::{start_server_with_capabilities, ServerHandle};
+pub use server::ServerHandle;
+pub(crate) use server::{api_method_name, start_server_with_stop_control};
 pub use status::{read_runtime_status_at, RuntimeStatus};
 
 use std::path::PathBuf;
@@ -18,7 +18,6 @@ use tokio::sync::mpsc;
 use crate::api::schema::{Method, Request};
 
 pub const SOCKET_PATH_ENV_VAR: &str = "HERDR_SOCKET_PATH";
-pub(crate) const MAX_JSON_LINE_BYTES: usize = 1024 * 1024;
 
 pub(crate) fn request_changes_ui(request: &Request) -> bool {
     matches!(
@@ -26,6 +25,9 @@ pub(crate) fn request_changes_ui(request: &Request) -> bool {
         Method::ServerReloadConfig(_)
             | Method::ServerReloadAgentManifests(_)
             | Method::NotificationShow(_)
+            | Method::ProductAnnouncementDismiss(_)
+            | Method::ReleaseNotesDismiss(_)
+            | Method::CommandInvoke(_)
             | Method::WorkspaceCreate(_)
             | Method::WorkspaceFocus(_)
             | Method::WorkspaceRename(_)
@@ -55,6 +57,7 @@ pub(crate) fn request_changes_ui(request: &Request) -> bool {
             | Method::AgentProfileCreate(_)
             | Method::AgentProfileSetMd(_)
             | Method::AgentProfileSet(_)
+            | Method::AgentProfileEdit(_)
             | Method::AgentProfileDelete(_)
             | Method::AgentPrompt(_)
             | Method::AgentBroadcast(_)
@@ -65,16 +68,12 @@ pub(crate) fn request_changes_ui(request: &Request) -> bool {
             | Method::PaneZoom(_)
             | Method::PaneFocusDirection(_)
             | Method::PaneResize(_)
+            | Method::PaneScroll(_)
+            | Method::PaneClear(_)
+            | Method::PaneEditScrollback(_)
             | Method::PaneFocus(_)
             | Method::PaneInputSet(_)
             | Method::PaneRename(_)
-            | Method::PaneGraphicsSet(_)
-            | Method::PaneGraphicsClear(_)
-            | Method::PaneGraphicsStream(_)
-            | Method::PaneGraphicsStreamSet(_)
-            | Method::PaneGraphicsStreamDirect(_)
-            | Method::PaneGraphicsStreamOpen(_)
-            | Method::PaneGraphicsStreamClose(_)
             | Method::PaneReportAgent(_)
             | Method::PaneReportAgentSession(_)
             | Method::PaneReportMetadata(_)
@@ -95,7 +94,6 @@ pub struct ApiRequestMessage {
     pub request: Request,
     pub respond_to: std::sync::mpsc::Sender<String>,
     pub response_write_complete: Option<std::sync::mpsc::Receiver<()>>,
-    pub stream_active: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 pub type ApiRequestSender = mpsc::UnboundedSender<ApiRequestMessage>;

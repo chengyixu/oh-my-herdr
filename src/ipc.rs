@@ -226,54 +226,6 @@ impl Read for DeadlineLocalStreamReader<'_> {
     }
 }
 
-#[cfg(unix)]
-pub(crate) fn shutdown_local_stream_write(stream: &LocalStream) -> io::Result<()> {
-    match stream {
-        LocalStream::UdSocket(stream) => stream.inner().shutdown(std::net::Shutdown::Write),
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct LocalStreamRetirer {
-    stream: LocalStream,
-}
-
-impl LocalStreamRetirer {
-    pub(crate) fn new(stream: LocalStream) -> Self {
-        Self { stream }
-    }
-
-    pub(crate) fn retire(&self) -> io::Result<()> {
-        #[cfg(unix)]
-        {
-            match &self.stream {
-                LocalStream::UdSocket(stream) => stream.inner().shutdown(std::net::Shutdown::Both),
-            }
-        }
-
-        #[cfg(windows)]
-        {
-            use windows_sys::Win32::{
-                Foundation::ERROR_PIPE_NOT_CONNECTED, System::Pipes::DisconnectNamedPipe,
-            };
-
-            match &self.stream {
-                LocalStream::NamedPipe(stream) => {
-                    if unsafe { DisconnectNamedPipe(stream.inner().as_raw_handle()) } != 0 {
-                        return Ok(());
-                    }
-                    let err = io::Error::last_os_error();
-                    if err.raw_os_error() == Some(ERROR_PIPE_NOT_CONNECTED as i32) {
-                        Ok(())
-                    } else {
-                        Err(err)
-                    }
-                }
-            }
-        }
-    }
-}
-
 /// Binds a listener for private terminal traffic. Unix callers restrict the
 /// socket file after binding; Windows must set the named-pipe DACL at creation.
 pub(crate) fn bind_private_local_listener(path: &Path) -> io::Result<LocalListener> {

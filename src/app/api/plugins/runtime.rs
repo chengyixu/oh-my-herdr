@@ -49,7 +49,7 @@ impl App {
             ("HERDR_PLUGIN_ID".to_string(), plugin.plugin_id.clone()),
             ("HERDR_PLUGIN_CONTEXT_JSON".to_string(), context_json),
         ]);
-        if let Ok(current_exe) = std::env::current_exe() {
+        if let Ok(current_exe) = crate::platform::launch_executable() {
             env.push((
                 "HERDR_BIN_PATH".to_string(),
                 current_exe.display().to_string(),
@@ -98,7 +98,8 @@ impl App {
             stderr: None,
             error: None,
         };
-        if self.no_session && self.state.plugin_commands_in_flight >= MAX_PLUGIN_COMMANDS_IN_FLIGHT
+        if !self.policy.persist_plugin_registry
+            && self.state.plugin_commands_in_flight >= MAX_PLUGIN_COMMANDS_IN_FLIGHT
         {
             return self.reject_plugin_command(
                 log,
@@ -109,7 +110,7 @@ impl App {
             );
         }
 
-        if !self.no_session {
+        if self.policy.persist_plugin_registry {
             let lease_id = match crate::persist::plugin_command_leases::acquire(
                 plugin_root.clone(),
                 MAX_PLUGIN_COMMANDS_IN_FLIGHT,
@@ -317,7 +318,7 @@ impl App {
         &self,
         checkout_path: &std::path::Path,
     ) -> std::io::Result<Option<std::path::PathBuf>> {
-        if !self.no_session {
+        if self.policy.persist_plugin_registry {
             return crate::persist::plugin_command_leases::active_root_within(checkout_path);
         }
         let checkout_path = crate::worktree::canonical_or_original(checkout_path);

@@ -32,9 +32,9 @@ enum Phase {
 
 /// A text selection within a terminal pane.
 #[derive(Debug, Clone)]
-pub struct Selection {
+pub struct Selection<P = PaneId> {
     /// Which pane the selection belongs to.
-    pub pane_id: PaneId,
+    pub pane_id: P,
     /// Anchor position in screen-buffer coordinates (row, col).
     anchor: (u32, u16),
     /// Current/final position in screen-buffer coordinates (row, col).
@@ -43,15 +43,10 @@ pub struct Selection {
     phase: Phase,
 }
 
-impl Selection {
+impl<P> Selection<P> {
     /// Start a potential selection. This records the anchor but doesn't
     /// make anything visible yet — the user might just be clicking.
-    pub fn anchor(
-        pane_id: PaneId,
-        viewport_row: u16,
-        col: u16,
-        metrics: Option<ScrollMetrics>,
-    ) -> Self {
+    pub fn anchor(pane_id: P, viewport_row: u16, col: u16, metrics: Option<ScrollMetrics>) -> Self {
         let anchor = (absolute_row_for_viewport_row(viewport_row, metrics), col);
         Self {
             pane_id,
@@ -61,29 +56,25 @@ impl Selection {
         }
     }
 
-    /// Create an active selection from an explicit viewport-row range.
-    pub(crate) fn range(
-        pane_id: PaneId,
-        viewport_row: u16,
-        start_col: u16,
-        end_col: u16,
-        metrics: Option<ScrollMetrics>,
-    ) -> Self {
-        let row = absolute_row_for_viewport_row(viewport_row, metrics);
+    pub(crate) fn absolute_anchor(pane_id: P, anchor: (u32, u16)) -> Self {
         Self {
             pane_id,
-            anchor: (row, start_col),
-            cursor: (row, end_col),
+            anchor,
+            cursor: anchor,
+            phase: Phase::Anchored,
+        }
+    }
+
+    pub(crate) fn absolute_range(pane_id: P, anchor: (u32, u16), cursor: (u32, u16)) -> Self {
+        Self {
+            pane_id,
+            anchor,
+            cursor,
             phase: Phase::Dragging,
         }
     }
 
-    pub(crate) fn line_range(
-        pane_id: PaneId,
-        anchor_row: u32,
-        cursor_row: u32,
-        end_col: u16,
-    ) -> Self {
+    pub(crate) fn line_range(pane_id: P, anchor_row: u32, cursor_row: u32, end_col: u16) -> Self {
         let (anchor_col, cursor_col) = if anchor_row <= cursor_row {
             (0, end_col)
         } else {
@@ -95,13 +86,6 @@ impl Selection {
             cursor: (cursor_row, cursor_col),
             phase: Phase::Dragging,
         }
-    }
-
-    pub(crate) fn absolute_row_for_viewport(
-        viewport_row: u16,
-        metrics: Option<ScrollMetrics>,
-    ) -> u32 {
-        absolute_row_for_viewport_row(viewport_row, metrics)
     }
 
     /// Convert the anchor's absolute row and pane-relative column back to
@@ -160,13 +144,9 @@ impl Selection {
     }
 
     /// Whether this selection was already finalized.
+    #[cfg(test)]
     pub fn is_finalized(&self) -> bool {
         self.phase == Phase::Done
-    }
-
-    /// Whether the user just clicked without dragging (not a selection).
-    pub fn was_just_click(&self) -> bool {
-        self.phase == Phase::Anchored
     }
 
     /// Whether the user just clicked without dragging (not a selection).
@@ -208,6 +188,55 @@ impl Selection {
         self.ordered()
     }
 
+    pub(crate) fn visible_rects(&self, inner: Rect, metrics: Option<ScrollMetrics>) -> [Rect; 3] {
+        let mut rects = [Rect::default(); 3];
+        if !self.is_visible() || inner.is_empty() {
+            return rects;
+        }
+        let ((start_row, start_col), (end_row, end_col)) = self.ordered();
+        let top = viewport_top_row(metrics);
+        let bottom = top.saturating_add(u32::from(inner.height));
+        let rect = |first: u32, end: u32, left: u16, right: u16| {
+            let first = first.max(top);
+            let end = end.min(bottom);
+            let left = left.min(inner.width);
+            let right = right.min(inner.width);
+            if first >= end || left >= right {
+                Rect::default()
+            } else {
+                Rect::new(
+                    inner.x + left,
+                    inner.y + (first - top) as u16,
+                    right - left,
+                    (end - first) as u16,
+                )
+            }
+        };
+        if start_row == end_row {
+            rects[0] = rect(
+                start_row,
+                start_row.saturating_add(1),
+                start_col,
+                end_col.saturating_add(1),
+            );
+        } else {
+            rects[0] = rect(
+                start_row,
+                start_row.saturating_add(1),
+                start_col,
+                inner.width,
+            );
+            rects[1] = rect(start_row.saturating_add(1), end_row, 0, inner.width);
+            rects[2] = rect(
+                end_row,
+                end_row.saturating_add(1),
+                0,
+                end_col.saturating_add(1),
+            );
+        }
+        rects
+    }
+
     /// Check whether a pane-relative cell (row, col) is inside the selection.
     pub fn contains(&self, viewport_row: u16, col: u16, metrics: Option<ScrollMetrics>) -> bool {
         if !self.is_visible() {
@@ -238,6 +267,10 @@ fn viewport_top_row(metrics: Option<ScrollMetrics>) -> u32 {
                 .saturating_sub(metrics.offset_from_bottom)
         })
         .unwrap_or(0) as u32
+}
+
+pub(crate) fn absolute_row_for_viewport(viewport_row: u16, metrics: Option<ScrollMetrics>) -> u32 {
+    absolute_row_for_viewport_row(viewport_row, metrics)
 }
 
 fn absolute_row_for_viewport_row(viewport_row: u16, metrics: Option<ScrollMetrics>) -> u32 {
@@ -338,6 +371,39 @@ pub fn write_osc52_bytes(bytes: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn visible_rects_match_selection_cells_when_scrolled_and_reversed() {
+        let inner = Rect::new(10, 5, 8, 6);
+        for (start, end) in [
+            ((0, 2), (0, 5)),
+            ((1, 3), (4, 2)),
+            ((4, 2), (1, 3)),
+            ((0, 0), (20, 7)),
+            ((20, 0), (22, 7)),
+        ] {
+            let selection = Selection::absolute_range((), start, end);
+            for top in [0, 2, 5, 20] {
+                let metrics = Some(ScrollMetrics {
+                    offset_from_bottom: 0,
+                    max_offset_from_bottom: top,
+                    viewport_rows: 6,
+                });
+                let rects = selection.visible_rects(inner, metrics);
+                for row in 0..inner.height {
+                    for col in 0..inner.width {
+                        assert_eq!(
+                            rects
+                                .iter()
+                                .any(|rect| rect.contains((inner.x + col, inner.y + row).into())),
+                            selection.contains(row, col, metrics),
+                            "start={start:?} end={end:?} top={top} row={row} col={col}",
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     fn make_sel(sr: u32, sc: u16, er: u32, ec: u16) -> Selection {
         let mut sel = Selection::anchor(PaneId::from_raw(0), sr as u16, sc, None);
@@ -485,7 +551,7 @@ mod tests {
     #[test]
     fn click_without_drag() {
         let mut sel = Selection::anchor(PaneId::from_raw(0), 5, 10, None);
-        assert!(sel.was_just_click());
+        assert!(sel.is_just_click());
         let copied = sel.finish();
         assert!(!copied);
     }
@@ -495,7 +561,7 @@ mod tests {
         let mut sel = Selection::anchor(PaneId::from_raw(0), 5, 10, None);
         sel.drag(20, 7, Rect::new(10, 5, 80, 24), None);
         assert!(sel.is_visible());
-        assert!(!sel.was_just_click());
+        assert!(!sel.is_just_click());
         let copied = sel.finish();
         assert!(copied);
     }

@@ -402,6 +402,7 @@ struct AgentStartPreparation {
     argv: Vec<String>,
     bytes: Bytes,
     timeout: Duration,
+    persisted_agent_session: Option<crate::agent_resume::PersistedAgentSession>,
 }
 
 impl App {
@@ -485,7 +486,7 @@ impl App {
         self.state
             .focus_pane_in_workspace(resolved.ws_idx, resolved.pane_id);
         self.state.mark_active_tab_seen();
-        self.state.settle_terminal_mode_after_focus();
+        self.state.mode = crate::app::Mode::Terminal;
         self.agent_info(resolved.ws_idx, resolved.pane_id)
             .ok_or_else(|| TerminalTargetError::NotFound {
                 target: target.to_string(),
@@ -591,6 +592,8 @@ impl App {
         if cwd.is_some_and(|cwd| cwd.to_str().is_none()) {
             return Err(AgentStartError::CwdNotUtf8);
         }
+        let persisted_agent_session =
+            crate::agent_resume::persisted_session_from_launch_args(kind, &params.args);
         let conflicts = self.agent_name_conflicts(&name, "");
         if !conflicts.is_empty() {
             return Err(AgentStartError::DuplicateName {
@@ -654,6 +657,7 @@ impl App {
             argv,
             bytes: Bytes::from(bytes),
             timeout,
+            persisted_agent_session,
         })
     }
 
@@ -683,6 +687,9 @@ impl App {
         if let Err(err) = runtime.try_send_bytes(preparation.bytes) {
             terminal.clear_agent_name();
             return Err(AgentStartError::InputFailed(err.to_string()));
+        }
+        if let Some(session) = preparation.persisted_agent_session {
+            terminal.set_managed_agent_launch_session(session);
         }
         self.state.mark_session_dirty();
         self.schedule_session_save();
@@ -814,7 +821,7 @@ impl App {
         let Some(preflight_kind) = crate::detect::parse_agent_label(preflight_kind) else {
             return Err(AgentSpawnError::InvalidKind);
         };
-        if !self.no_session
+        if self.policy.persist_session
             && preflight_profile.is_none()
             && matches!(
                 crate::detect::agent_label(preflight_kind),
@@ -1475,7 +1482,7 @@ impl App {
             .update_agent_registry(move |registry| registry.remove_profile(&registry_role))
             .map_err(|err| AgentProfileError::PersistFailed(err.to_string()))?
             .ok_or_else(|| AgentProfileError::NotFound(role.clone()))?;
-        if !self.no_session {
+        if self.policy.persist_session {
             if let Err(err) = crate::agent_registry::remove_owned_instructions(&removed.role) {
                 tracing::warn!(err = %err, role = %removed.role, "failed to remove deleted agent profile instructions");
             }
@@ -1518,7 +1525,7 @@ impl App {
         if self.agent_registry.get(&params.role).is_some() {
             return Err(AgentProfileError::AlreadyExists(params.role));
         }
-        if self.no_session {
+        if !self.policy.persist_session {
             return Err(AgentProfileError::PersistFailed(
                 "agent profiles require a persistent Herdr session".into(),
             ));
@@ -2095,6 +2102,7 @@ impl App {
             launch_pending: terminal.managed_agent_launch_pending(),
             interactive_ready: terminal.managed_agent_interactive_ready(),
             state_change_seq: terminal.last_agent_state_change_seq.unwrap_or(0),
+            completion_seq: terminal.last_agent_completion_seq,
             cwd: pane.cwd,
             foreground_cwd: pane.foreground_cwd,
             revision: pane.revision,
@@ -2302,7 +2310,7 @@ mod tests {
         let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &Config::default(),
-            true,
+            crate::app::AppPolicy::TEST,
             None,
             rx,
             crate::api::EventHub::default(),
@@ -2376,7 +2384,7 @@ mod tests {
         let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &Config::default(),
-            true,
+            crate::app::AppPolicy::TEST,
             None,
             rx,
             crate::api::EventHub::default(),
@@ -2517,7 +2525,7 @@ mod tests {
         let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &Config::default(),
-            true,
+            crate::app::AppPolicy::TEST,
             None,
             rx,
             crate::api::EventHub::default(),
@@ -2554,7 +2562,7 @@ mod tests {
         let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &Config::default(),
-            true,
+            crate::app::AppPolicy::TEST,
             None,
             rx,
             crate::api::EventHub::default(),
@@ -2662,7 +2670,7 @@ mod tests {
         let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &Config::default(),
-            true,
+            crate::app::AppPolicy::TEST,
             None,
             rx,
             crate::api::EventHub::default(),
@@ -2692,7 +2700,7 @@ mod tests {
         let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &Config::default(),
-            true,
+            crate::app::AppPolicy::TEST,
             None,
             rx,
             crate::api::EventHub::default(),
@@ -2760,7 +2768,7 @@ mod tests {
         let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &Config::default(),
-            true,
+            crate::app::AppPolicy::TEST,
             None,
             rx,
             crate::api::EventHub::default(),
@@ -2843,13 +2851,13 @@ mod tests {
                 let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
                 App::new(
                     &Config::default(),
-                    true,
+                    crate::app::AppPolicy::TEST,
                     None,
                     rx,
                     crate::api::EventHub::default(),
                 )
             };
-            app.no_session = false;
+            app.policy.persist_session = true;
             app.agent_registry = stale;
             let path = crate::session::data_dir().join("agents.json");
             let before = std::fs::read(&path).unwrap();
@@ -2901,7 +2909,7 @@ mod tests {
         let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &Config::default(),
-            true,
+            crate::app::AppPolicy::TEST,
             None,
             rx,
             crate::api::EventHub::default(),
@@ -2942,7 +2950,7 @@ mod tests {
         let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &Config::default(),
-            true,
+            crate::app::AppPolicy::TEST,
             None,
             rx,
             crate::api::EventHub::default(),
@@ -2981,7 +2989,7 @@ mod tests {
         let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &Config::default(),
-            true,
+            crate::app::AppPolicy::TEST,
             None,
             rx,
             crate::api::EventHub::default(),
@@ -3005,12 +3013,12 @@ mod tests {
         let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &Config::default(),
-            true,
+            crate::app::AppPolicy::TEST,
             None,
             rx,
             crate::api::EventHub::default(),
         );
-        app.no_session = false;
+        app.policy.persist_session = true;
         app.agent_registry.version = crate::agent_registry::REGISTRY_VERSION + 1;
 
         let err = app
@@ -3048,7 +3056,7 @@ mod tests {
         let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &Config::default(),
-            true,
+            crate::app::AppPolicy::TEST,
             None,
             rx,
             crate::api::EventHub::default(),
@@ -3107,7 +3115,7 @@ mod tests {
         let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &Config::default(),
-            true,
+            crate::app::AppPolicy::TEST,
             None,
             rx,
             crate::api::EventHub::default(),
@@ -3203,7 +3211,7 @@ mod tests {
         let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &Config::default(),
-            true,
+            crate::app::AppPolicy::TEST,
             None,
             rx,
             crate::api::EventHub::default(),
@@ -3254,7 +3262,7 @@ mod tests {
         let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &Config::default(),
-            true,
+            crate::app::AppPolicy::TEST,
             None,
             rx,
             crate::api::EventHub::default(),
@@ -3311,7 +3319,7 @@ mod tests {
         let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &Config::default(),
-            true,
+            crate::app::AppPolicy::TEST,
             None,
             rx,
             crate::api::EventHub::default(),

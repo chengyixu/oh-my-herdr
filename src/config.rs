@@ -8,6 +8,7 @@ mod sound;
 mod tab_bar;
 mod theme;
 mod window_title;
+mod write;
 
 pub use self::{
     io::{
@@ -16,14 +17,14 @@ pub use self::{
         upsert_section_value,
     },
     keybinds::{
-        format_key_combo, normalize_key_combo, terminal_key_matches_combo, ActionKeybinds,
+        format_prefix_combos, normalize_key_combo, terminal_key_matches_combo, ActionKeybinds,
         BindingConfig, CommandKeybindConfig, CustomCommandAction, CustomCommandKeybind,
-        IndexedKeybind, Keybinds, LiveKeybindConfig,
+        IndexedKeybind, KeyCombo, Keybinds, LiveKeybindConfig,
     },
     model::{
         validated_sidebar_bounds, AgentPanelSortConfig, Config, ConfigReloadReport,
-        ConfigReloadStatus, HostCursorModeConfig, NewTerminalCwdConfig, ShellModeConfig,
-        SidebarCollapsedModeConfig, StatusIndicatorStyle, TabBarPositionConfig,
+        ConfigReloadStatus, HostCursorModeConfig, NewTerminalCwdConfig, PaneBordersConfig,
+        ShellModeConfig, SidebarCollapsedModeConfig, StatusIndicatorStyle, TabBarPositionConfig,
         ToastClipboardPosition, ToastConfig, ToastDelivery, ToastHerdrPosition,
         UpdateChannelConfig, MAX_TOAST_DELAY_SECONDS,
     },
@@ -42,6 +43,7 @@ pub(crate) use self::io::product_name;
 #[cfg(test)]
 pub(crate) use self::io::app_dir_name;
 pub(crate) use self::keybinds::parse_key_combo;
+pub(crate) use self::write::{update_file_at, write_edit, ConfigEdit};
 pub(crate) use self::{
     io::upsert_top_level_bool,
     tab_bar::{
@@ -53,7 +55,28 @@ pub(crate) use self::{
     window_title::{sanitize_window_title_text, window_title_diagnostics},
 };
 
+pub(crate) use self::{keybinds::CommandKeybindType, model::KeysConfig};
+
 pub const CONFIG_PATH_ENV_VAR: &str = "HERDR_CONFIG_PATH";
+
+pub(crate) fn is_keybinding_config_diagnostic(diagnostic: &str) -> bool {
+    if diagnostic.starts_with("config parse error:") || diagnostic.starts_with("config read error:")
+    {
+        return false;
+    }
+    diagnostic.contains("keybinding") || diagnostic.contains("keys.")
+}
+
+pub(crate) fn config_diagnostic_summary_without_keybindings(
+    diagnostics: &[String],
+) -> Option<String> {
+    let diagnostics = diagnostics
+        .iter()
+        .filter(|diagnostic| !is_keybinding_config_diagnostic(diagnostic))
+        .cloned()
+        .collect::<Vec<_>>();
+    config_diagnostic_summary(&diagnostics)
+}
 pub const DEFAULT_SCROLLBACK_LIMIT_BYTES: usize = 10_000_000;
 pub const DEFAULT_MOUSE_SCROLL_LINES: usize = 3;
 pub const DEFAULT_MOBILE_WIDTH_THRESHOLD: u16 = 64;
@@ -71,7 +94,14 @@ impl Config {
         self.onboarding.unwrap_or(true)
     }
 
-    pub fn prefix_key(&self) -> (KeyCode, KeyModifiers) {
+    pub fn kitty_graphics_enabled(&self) -> bool {
+        self.terminal
+            .kitty_graphics
+            .or(self.experimental.kitty_graphics)
+            .unwrap_or(true)
+    }
+
+    pub fn prefix_keys(&self) -> Vec<(KeyCode, KeyModifiers)> {
         self.validated_keybinds().1
     }
 
@@ -133,12 +163,6 @@ impl Config {
         })
     }
 
-    #[cfg(test)]
-    pub fn live_keybinds(&self) -> Result<LiveKeybindConfig, Vec<String>> {
-        self.live_keybinds_with_diagnostics()
-            .map(|(live, _diagnostics)| live)
-    }
-
     pub(crate) fn live_keybinds_with_diagnostics(
         &self,
     ) -> Result<(LiveKeybindConfig, Vec<String>), Vec<String>> {
@@ -156,10 +180,19 @@ impl Config {
             keys: model::KeysConfigOverlay,
         }
 
-        toml::to_string_pretty(&KeysProfile {
-            keys: self.keys.local_profile(&self.keybinds()),
-        })
+        let mut keys = self.keys.local_profile(&self.keybinds());
+        keys.set_prefixes(&self.prefix_keys());
+        toml::to_string_pretty(&KeysProfile { keys })
     }
+}
+
+pub(crate) fn keybindings_from_profile_toml(profile: &str) -> Result<LiveKeybindConfig, String> {
+    let config = toml::from_str::<Config>(profile)
+        .map_err(|err| format!("invalid keybinding profile: {err}"))?;
+    config
+        .live_keybinds_with_diagnostics()
+        .map(|(keybinds, _diagnostics)| keybinds)
+        .map_err(|diagnostics| diagnostics.join("; "))
 }
 
 #[cfg(test)]
@@ -189,6 +222,58 @@ command = "lazygit"
         assert!(!profile.contains("lazygit"));
         assert!(!profile.contains("command ="));
         assert!(!profile.contains("[[keys.command]]"));
+    }
+
+    #[test]
+    fn local_keybindings_profile_publishes_the_effective_prefix_fallback() {
+        let config: Config = toml::from_str(
+            r#"
+[keys]
+prefix = "ctrl+"
+"#,
+        )
+        .unwrap();
+
+        let profile = config.local_keybindings_profile_toml().unwrap();
+        let keybinds = keybindings_from_profile_toml(&profile).unwrap();
+
+        assert!(profile.contains("prefix = \"ctrl+b\""));
+        assert_eq!(keybinds.prefix, config.prefix_keys());
+    }
+
+    #[test]
+    fn local_keybindings_profile_publishes_additional_prefixes_for_old_clients() {
+        let config: Config = toml::from_str(
+            r#"
+[keys]
+prefix = ["ctrl+space", "ctrl+s"]
+"#,
+        )
+        .unwrap();
+
+        let profile = config.local_keybindings_profile_toml().unwrap();
+
+        // Generation-1 clients parse `prefix` as a single string; the extra
+        // prefixes ride in the optional `extra_prefixes` field they ignore.
+        assert!(profile.contains("prefix = \"ctrl+space\""));
+        assert!(!profile.contains("prefix = ["));
+        assert!(profile.contains("extra_prefixes = [\"ctrl+s\"]"));
+
+        let keybinds = keybindings_from_profile_toml(&profile).unwrap();
+        assert_eq!(keybinds.prefix, config.prefix_keys());
+    }
+
+    #[test]
+    fn local_keybindings_profile_omits_extra_prefixes_for_a_single_prefix() {
+        let config: Config = toml::from_str(
+            r#"
+[keys]
+prefix = "ctrl+b"
+"#,
+        )
+        .unwrap();
+        let profile = config.local_keybindings_profile_toml().unwrap();
+        assert!(!profile.contains("extra_prefixes"));
     }
 
     #[test]

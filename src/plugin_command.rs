@@ -278,7 +278,7 @@ pub(crate) fn read_capped_plugin_output(mut reader: impl Read, cap: usize) -> St
     output
 }
 
-fn program_for_cwd(program: &str, cwd: &Path) -> OsString {
+pub(crate) fn program_for_cwd(program: &str, cwd: &Path) -> OsString {
     let path = Path::new(program);
     let has_separator = program.contains('/') || (cfg!(windows) && program.contains('\\'));
     if path.is_relative() && has_separator {

@@ -61,7 +61,7 @@ Herdr deliberately does not rewrite modified arrows because terminal application
 
 ## Herdr updated, but the running session is still old
 
-Updating the binary does not always replace a compatible server that is already running. Check `herdr status`. To start the updated server, stop the session and launch Herdr again:
+Updating the binary does not replace a compatible server that is already running. Start Herdr again to use the updated client. If you also need server-side changes from the release, check `herdr status`, then stop the session and launch Herdr again:
 
 ```bash
 herdr server stop
@@ -69,6 +69,31 @@ herdr
 ```
 
 Stopping a server exits its pane processes. Named sessions use `herdr session stop <name>`. See [Install Herdr](/docs/install/#update) for updater, package-manager, and live-handoff behavior.
+
+## Keychain-backed tools fail inside Herdr on macOS
+
+Check the server launch context from a Herdr pane:
+
+```bash
+launchctl managername
+```
+
+`Background` is normal for automatically started macOS servers and does not by itself indicate a Keychain problem. If Keychain access fails and the server was started through SSH or a background job, stop it and start Herdr again from a normal GUI terminal:
+
+```bash
+herdr server stop
+herdr
+```
+
+Stopping the server exits its pane processes. Herdr panes inherit the long-lived server's macOS launch context, so a server started through SSH or a background job may not have access to interactive Keychain services. See [Herdr issue #966](https://github.com/herdrdev/herdr/issues/966) for details.
+
+## SSH or DNS fails after macOS logout
+
+Automatically started macOS servers use a per-user service context so logging out does not leave their panes with a dead connection to macOS services. Explicit `herdr server` launches retain their caller's context.
+
+An older server can survive logout while losing user lookup and DNS. Symptoms include `No user exists for uid 501`, `Could not get manager name.`, and `curl: (6) Could not resolve host`. Logging back in does not repair that server. Stop the affected session and start Herdr from a GUI terminal in the new login. This ends live pane processes but restores the saved session layout. Live handoff preserves the source server's service context and existing pane processes. Older servers therefore need a full session restart to adopt this fix; handoff cannot repair their inherited context.
+
+If a newly started server still has this problem, check `herdr-server.log` for `could not select persistent user service context`. Herdr keeps the inherited context if the required macOS APIs are unavailable. See [Herdr issue #4100](https://github.com/herdrdev/herdr/issues/4100).
 
 ## The `herdr` command is not found
 

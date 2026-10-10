@@ -1,0 +1,13 @@
+{
+  "agent.harness.prepare": "3904e6bb149e248e73e287fde6d1d27898ac267d885639073900020547629fe2",
+  "agent.harness.set": "1b15f64ccf43707797b5fd203283cd98af7eafd1da276568b6d4c9b7b7d6987a",
+  "agent.profile.create": "91082e1849fe252f34d3d5ebfb4e2d7f7e77294ddc3a188317784ee362f9fbd1",
+  "agent.profile.delete": "c8bec6d6307bcf52fe3d5cf8ccd09f7a36ed5a233bf6535a892f55939a9d715c",
+  "agent.profile.edit": "95c2b8a9dbe33246d006207e5eff7cc3dd3a72c89dbf3d012e36b297add9de73",
+  "agent.profile.get": "b45470c9d1e8749f28d9f3c8bd2328cad7c4e8d636f78a938bd7ea50b114708b",
+  "agent.profile.list": "e263dba9edfe1a23592c32b1f932cf835920ae8b03c258d3a2dae47b29eae322",
+  "agent.profile.set": "695e0dead92320b8d215ca839211c5cbec68e026ec9b2aa58e8da0677fc4c3b6",
+  "agent.revive": "47d813a16f65d9df42c030a346f9868ef7e475a1ddd4c7eb66780dba7d58447e",
+  "agent.roster.list": "48797a93f19845168e26f528e7bd62d10b06da251f4f417601da4f0398e38fbb",
+  "agent.spawn": "8e4d42c740de5c9eea61bfd0442ed958593cd2212bc7d8d5340fb82cb1d9f023"
+}

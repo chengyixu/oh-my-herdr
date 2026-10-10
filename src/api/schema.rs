@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 pub mod agents;
+pub mod commands;
 pub mod common;
 pub mod events;
 pub mod integrations;
@@ -14,6 +15,7 @@ pub mod workspaces;
 pub mod worktrees;
 
 pub use agents::*;
+pub use commands::*;
 pub use common::*;
 pub use events::*;
 pub use integrations::*;
@@ -51,16 +53,26 @@ pub enum Method {
     ServerLiveHandoff(ServerLiveHandoffParams),
     #[serde(rename = "server.reload_config")]
     ServerReloadConfig(EmptyParams),
+    #[serde(rename = "server.ssh_agent.register")]
+    ServerSshAgentRegister(ServerSshAgentRegisterParams),
     #[serde(rename = "server.agent_manifests")]
     ServerAgentManifests(EmptyParams),
     #[serde(rename = "server.reload_agent_manifests")]
     ServerReloadAgentManifests(EmptyParams),
     #[serde(rename = "notification.show")]
     NotificationShow(NotificationShowParams),
+    #[serde(rename = "product_announcement.dismiss")]
+    ProductAnnouncementDismiss(ProductAnnouncementDismissParams),
+    #[serde(rename = "release_notes.dismiss")]
+    ReleaseNotesDismiss(ReleaseNotesDismissParams),
+    #[serde(rename = "command.invoke")]
+    CommandInvoke(CommandInvokeParams),
     #[serde(rename = "client.window_title.set")]
     ClientWindowTitleSet(ClientWindowTitleSetParams),
     #[serde(rename = "client.window_title.clear")]
     ClientWindowTitleClear(EmptyParams),
+    #[serde(rename = "client_shell.surface.set")]
+    ClientShellSurfaceSet(ClientShellSurfaceSetParams),
     #[serde(rename = "session.snapshot")]
     SessionSnapshot(EmptyParams),
     #[serde(rename = "workspace.create")]
@@ -143,6 +155,8 @@ pub enum Method {
     AgentProfileList(EmptyParams),
     #[serde(rename = "agent.profile.set")]
     AgentProfileSet(AgentProfileSetParams),
+    #[serde(rename = "agent.profile.edit")]
+    AgentProfileEdit(AgentProfileEditParams),
     #[serde(rename = "agent.profile.delete")]
     AgentProfileDelete(AgentProfileDeleteParams),
     #[serde(rename = "agent.prompt")]
@@ -177,6 +191,18 @@ pub enum Method {
     PaneFocusDirection(PaneFocusDirectionParams),
     #[serde(rename = "pane.resize")]
     PaneResize(PaneResizeParams),
+    #[serde(rename = "pane.scroll")]
+    PaneScroll(PaneScrollParams),
+    #[serde(rename = "pane.clear")]
+    PaneClear(PaneTarget),
+    #[serde(rename = "pane.edit_scrollback")]
+    PaneEditScrollback(PaneTarget),
+    #[serde(rename = "pane.selection.read")]
+    PaneSelectionRead(PaneSelectionReadParams),
+    #[serde(rename = "pane.copy_motion")]
+    PaneCopyMotion(PaneCopyMotionParams),
+    #[serde(rename = "pane.copy_search")]
+    PaneCopySearch(PaneCopySearchParams),
     #[serde(rename = "pane.list")]
     PaneList(PaneListParams),
     #[serde(rename = "pane.current")]
@@ -187,6 +213,10 @@ pub enum Method {
     PaneFocus(PaneTarget),
     #[serde(rename = "pane.input.set")]
     PaneInputSet(PaneInputSetParams),
+    #[serde(rename = "pane.link.activate")]
+    PaneLinkActivate(PaneLinkActivateParams),
+    #[serde(rename = "pane.link.resolve")]
+    PaneLinkResolve(PaneLinkActivateParams),
     #[serde(rename = "pane.rename")]
     PaneRename(PaneRenameParams),
     #[serde(rename = "pane.send_text")]
@@ -197,27 +227,6 @@ pub enum Method {
     PaneSendInput(PaneSendInputParams),
     #[serde(rename = "pane.read")]
     PaneRead(PaneReadParams),
-    #[serde(rename = "pane.graphics.set")]
-    PaneGraphicsSet(PaneGraphicsSetParams),
-    #[serde(rename = "pane.graphics.clear")]
-    PaneGraphicsClear(PaneGraphicsClearParams),
-    #[serde(rename = "pane.graphics.info")]
-    PaneGraphicsInfo(PaneTarget),
-    #[serde(rename = "pane.graphics.stream")]
-    #[schemars(skip)]
-    PaneGraphicsStream(PaneGraphicsStreamParams),
-    #[serde(skip)]
-    #[schemars(skip)]
-    PaneGraphicsStreamSet(PaneGraphicsSetParams),
-    #[serde(skip)]
-    #[schemars(skip)]
-    PaneGraphicsStreamDirect(PaneGraphicsDirectParams),
-    #[serde(skip)]
-    #[schemars(skip)]
-    PaneGraphicsStreamOpen(PaneGraphicsStreamParams),
-    #[serde(skip)]
-    #[schemars(skip)]
-    PaneGraphicsStreamClose(PaneGraphicsStreamParams),
     #[serde(rename = "pane.report_agent")]
     PaneReportAgent(PaneReportAgentParams),
     #[serde(rename = "pane.report_agent_session")]
@@ -238,6 +247,8 @@ pub enum Method {
     EventsWait(EventsWaitParams),
     #[serde(rename = "pane.wait_for_output")]
     PaneWaitForOutput(PaneWaitForOutputParams),
+    #[serde(rename = "integration.list")]
+    IntegrationList(EmptyParams),
     #[serde(rename = "integration.install")]
     IntegrationInstall(IntegrationInstallParams),
     #[serde(rename = "integration.uninstall")]

@@ -37,6 +37,7 @@ pub struct ApiWorktreeRemoveRequest {
     pub id: String,
     pub operation_id: u64,
     pub checkout_key: std::path::PathBuf,
+    pub shutdown_panes: Vec<crate::layout::PaneId>,
     pub respond_to: std::sync::mpsc::Sender<String>,
 }
 
@@ -51,17 +52,45 @@ pub struct WorktreeRemoveResult {
     pub result: Result<(), String>,
 }
 
+#[derive(Debug)]
+pub struct WorktreeReadResult {
+    // Keep the slot until completion is consumed, including time queued on the app loop.
+    pub(crate) _permit: tokio::sync::OwnedSemaphorePermit,
+    pub(crate) client_local: bool,
+    pub(crate) request: crate::api::schema::Request,
+    pub(crate) source_workspace_id: Option<String>,
+    pub(crate) source_cwd: Option<std::path::PathBuf>,
+    pub(crate) result: Result<WorktreeReadData, (String, String)>,
+    pub(crate) respond_to: std::sync::mpsc::Sender<String>,
+}
+
+#[derive(Debug)]
+pub(crate) struct WorktreeReadData {
+    pub source_checkout_path: std::path::PathBuf,
+    pub source_repo_root: std::path::PathBuf,
+    pub repo_key: String,
+    pub repo_name: String,
+    pub entries: Vec<crate::worktree::ExistingWorktree>,
+}
+
 /// An event from a background task to the main loop.
 #[derive(Debug)]
 pub enum AppEvent {
     /// A pane's child process exited.
-    PaneDied { pane_id: PaneId },
+    PaneDied {
+        pane_id: PaneId,
+        exit_reason: crate::platform::ChildExitReason,
+    },
+    /// A worktree-removal runtime could not be restored normally.
+    WorktreeRuntimeRestoreFailed { pane_id: PaneId, operation_id: u64 },
     /// Process detection identified an agent before its screen state was confirmed.
     AgentProcessDetected {
         pane_id: PaneId,
         agent: Agent,
         observed_at: Instant,
     },
+    /// The current Codex input screen is visible during managed startup.
+    CodexPromptObserved { pane_id: PaneId, ready: bool },
     /// Fallback detector state changed in a pane.
     StateChanged {
         pane_id: PaneId,
@@ -90,6 +119,19 @@ pub enum AppEvent {
         seq: Option<u64>,
         session_ref: Option<crate::agent_resume::AgentSessionRef>,
         session_start_source: Option<String>,
+    },
+    /// A reporter supplied the command that resumes its own session.
+    AgentResumeReported {
+        pane_id: PaneId,
+        source: String,
+        agent_label: String,
+        seq: Option<u64>,
+        argv: Vec<String>,
+    },
+    /// A pane held by a self-reported agent is back at its idle shell.
+    ReportedAgentShellReturned {
+        pane_id: PaneId,
+        observed_at: std::time::Instant,
     },
     /// Display-only agent metadata was reported for a pane.
     HookMetadataReported {
@@ -137,11 +179,6 @@ pub enum AppEvent {
     /// A pane child emitted a valid OSC 52 clipboard write. The main loop
     /// re-emits it through herdr's own clipboard writer.
     ClipboardWrite { content: Vec<u8> },
-    /// Prefix-mode ASCII input-source request, emitted on entering/leaving the ASCII input
-    /// realm. The foreground process applies the host-local TIS switch (`active = true`) /
-    /// restore (`active = false`): the client in server mode (via server forwarding), the
-    /// app itself in monolithic mode.
-    PrefixInputSource { active: bool },
     /// A pane child reported its shell current directory through terminal
     /// metadata such as OSC 7.
     TerminalCwdReported {
@@ -172,4 +209,6 @@ pub enum AppEvent {
     WorktreeAddFinished(Box<WorktreeAddResult>),
     /// Background `git worktree remove` completed.
     WorktreeRemoveFinished(Box<WorktreeRemoveResult>),
+    /// Background worktree discovery completed for an API list/open request.
+    WorktreeReadFinished(Box<WorktreeReadResult>),
 }

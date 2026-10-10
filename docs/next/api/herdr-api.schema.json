@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "protocol": 21,
+  "protocol": 22,
   "schema_version": 1,
   "schemas": {
     "error_response": {
@@ -808,6 +808,12 @@
             "pane_id": {
               "type": "string"
             },
+            "restore_error": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "revision": {
               "format": "uint64",
               "minimum": 0,
@@ -1294,6 +1300,43 @@
             "role": {
               "pattern": "^[a-z][a-z0-9_-]{0,31}$",
               "type": "string"
+            }
+          },
+          "required": [
+            "role"
+          ],
+          "type": "object"
+        },
+        "AgentProfileEditParams": {
+          "description": "Read or edit native profile-owned documents. An omitted patch/documents reads\nthe dossier; content and filesystem paths are never taken from the client.",
+          "properties": {
+            "delete_document": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "documents": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "default": {},
+              "type": "object"
+            },
+            "role": {
+              "type": "string"
+            },
+            "settings": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/request/$defs/AgentProfileSetParams"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             }
           },
           "required": [
@@ -1963,6 +2006,18 @@
           ],
           "type": "object"
         },
+        "ClientShellSurfaceSetParams": {
+          "description": "Updates whether the requesting client shell receives and controls pane presentation.",
+          "properties": {
+            "active": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "active"
+          ],
+          "type": "object"
+        },
         "ClientWindowTitleSetParams": {
           "properties": {
             "title": {
@@ -1971,6 +2026,47 @@
           },
           "required": [
             "title"
+          ],
+          "type": "object"
+        },
+        "CommandInvokeParams": {
+          "properties": {
+            "command_id": {
+              "description": "Opaque endpoint-issued command identifier from the client-shell projection.",
+              "type": "string"
+            },
+            "pane_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "selection": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/request/$defs/PaneSelectionReadParams"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Client-owned selection coordinates, validated against the pane's content revision."
+            },
+            "tab_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "workspace_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "command_id"
           ],
           "type": "object"
         },
@@ -2677,6 +2773,94 @@
           ],
           "type": "object"
         },
+        "PaneCopyMotion": {
+          "enum": [
+            "line_end",
+            "first_non_blank",
+            "next_word_start",
+            "previous_word_start",
+            "next_word_end",
+            "next_big_word_start",
+            "previous_big_word_start",
+            "next_big_word_end",
+            "previous_paragraph",
+            "next_paragraph"
+          ],
+          "type": "string"
+        },
+        "PaneCopyMotionParams": {
+          "properties": {
+            "content_revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "cursor": {
+              "$ref": "#/schemas/request/$defs/PaneTextPoint"
+            },
+            "motion": {
+              "$ref": "#/schemas/request/$defs/PaneCopyMotion"
+            },
+            "pane_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "pane_id",
+            "cursor",
+            "motion"
+          ],
+          "type": "object"
+        },
+        "PaneCopySearchDirection": {
+          "enum": [
+            "forward",
+            "backward"
+          ],
+          "type": "string"
+        },
+        "PaneCopySearchParams": {
+          "properties": {
+            "content_revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "cursor": {
+              "$ref": "#/schemas/request/$defs/PaneTextPoint"
+            },
+            "direction": {
+              "$ref": "#/schemas/request/$defs/PaneCopySearchDirection"
+            },
+            "pane_id": {
+              "type": "string"
+            },
+            "previous": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/request/$defs/PaneTextRange"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "query": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "pane_id",
+            "query",
+            "direction",
+            "cursor",
+            "content_revision"
+          ],
+          "type": "object"
+        },
         "PaneCurrentParams": {
           "properties": {
             "caller_pane_id": {
@@ -2725,110 +2909,6 @@
           ],
           "type": "object"
         },
-        "PaneGraphicsClearParams": {
-          "properties": {
-            "layer_id": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "pane_id": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "pane_id"
-          ],
-          "type": "object"
-        },
-        "PaneGraphicsFormat": {
-          "enum": [
-            "png",
-            "rgb",
-            "rgba",
-            "bgra"
-          ],
-          "type": "string"
-        },
-        "PaneGraphicsPlacementParams": {
-          "properties": {
-            "grid_cols": {
-              "default": 0,
-              "format": "uint32",
-              "minimum": 0,
-              "type": "integer"
-            },
-            "grid_rows": {
-              "default": 0,
-              "format": "uint32",
-              "minimum": 0,
-              "type": "integer"
-            },
-            "viewport_col": {
-              "default": 0,
-              "format": "int32",
-              "type": "integer"
-            },
-            "viewport_row": {
-              "default": 0,
-              "format": "int32",
-              "type": "integer"
-            }
-          },
-          "type": "object"
-        },
-        "PaneGraphicsSetParams": {
-          "properties": {
-            "data_base64": {
-              "default": "",
-              "type": "string"
-            },
-            "format": {
-              "$ref": "#/schemas/request/$defs/PaneGraphicsFormat"
-            },
-            "image_height": {
-              "format": "uint32",
-              "minimum": 0,
-              "type": "integer"
-            },
-            "image_width": {
-              "format": "uint32",
-              "minimum": 0,
-              "type": "integer"
-            },
-            "layer_id": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "pane_id": {
-              "type": "string"
-            },
-            "placement": {
-              "$ref": "#/schemas/request/$defs/PaneGraphicsPlacementParams",
-              "default": {
-                "grid_cols": 0,
-                "grid_rows": 0,
-                "viewport_col": 0,
-                "viewport_row": 0
-              }
-            },
-            "z_index": {
-              "default": 0,
-              "format": "int32",
-              "type": "integer"
-            }
-          },
-          "required": [
-            "pane_id",
-            "format",
-            "image_width",
-            "image_height"
-          ],
-          "type": "object"
-        },
         "PaneInputSetParams": {
           "properties": {
             "pane_id": {
@@ -2853,6 +2933,47 @@
               ]
             }
           },
+          "type": "object"
+        },
+        "PaneLinkActivateParams": {
+          "properties": {
+            "col": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "content_revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "offset_from_bottom": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "pane_id": {
+              "type": "string"
+            },
+            "viewport_row": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "pane_id",
+            "viewport_row",
+            "col"
+          ],
           "type": "object"
         },
         "PaneListParams": {
@@ -3099,6 +3220,16 @@
             "pane_id": {
               "type": "string"
             },
+            "resume_argv": {
+              "description": "Command that resumes this agent's session after a Herdr restart. The\nfirst element must be a plain command name.",
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
             "seq": {
               "format": "uint64",
               "minimum": 0,
@@ -3141,6 +3272,16 @@
             },
             "pane_id": {
               "type": "string"
+            },
+            "resume_argv": {
+              "description": "Command that resumes this agent's session after a Herdr restart. The\nfirst element must be a plain command name.",
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
             },
             "seq": {
               "format": "uint64",
@@ -3284,6 +3425,50 @@
             "pane"
           ],
           "type": "string"
+        },
+        "PaneScrollParams": {
+          "properties": {
+            "offset_from_bottom": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "pane_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "pane_id",
+            "offset_from_bottom"
+          ],
+          "type": "object"
+        },
+        "PaneSelectionReadParams": {
+          "properties": {
+            "anchor": {
+              "$ref": "#/schemas/request/$defs/PaneTextPoint"
+            },
+            "content_revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "cursor": {
+              "$ref": "#/schemas/request/$defs/PaneTextPoint"
+            },
+            "pane_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "pane_id",
+            "anchor",
+            "cursor"
+          ],
+          "type": "object"
         },
         "PaneSendInputParams": {
           "properties": {
@@ -3429,6 +3614,41 @@
           },
           "required": [
             "pane_id"
+          ],
+          "type": "object"
+        },
+        "PaneTextPoint": {
+          "properties": {
+            "col": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "row": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "row",
+            "col"
+          ],
+          "type": "object"
+        },
+        "PaneTextRange": {
+          "properties": {
+            "end": {
+              "$ref": "#/schemas/request/$defs/PaneTextPoint"
+            },
+            "start": {
+              "$ref": "#/schemas/request/$defs/PaneTextPoint"
+            }
+          },
+          "required": [
+            "start",
+            "end"
           ],
           "type": "object"
         },
@@ -3905,6 +4125,21 @@
             }
           ]
         },
+        "ProductAnnouncementDismissParams": {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "version",
+            "id"
+          ],
+          "type": "object"
+        },
         "ReadFormat": {
           "enum": [
             "text",
@@ -3920,6 +4155,17 @@
             "detection"
           ],
           "type": "string"
+        },
+        "ReleaseNotesDismissParams": {
+          "properties": {
+            "version": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "version"
+          ],
+          "type": "object"
         },
         "ServerLiveHandoffParams": {
           "properties": {
@@ -3944,6 +4190,18 @@
               ]
             }
           },
+          "type": "object"
+        },
+        "ServerSshAgentRegisterParams": {
+          "properties": {
+            "socket_path": {
+              "description": "Absolute remote-host agent socket. Registration lasts until this API connection closes.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "socket_path"
+          ],
           "type": "object"
         },
         "SplitDirection": {
@@ -4456,6 +4714,13 @@
                 "string",
                 "null"
               ]
+            },
+            "source_workspace_id": {
+              "description": "Workspace whose focused pane supplies the `follow` cwd policy.",
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           "type": "object"
@@ -4632,6 +4897,9 @@
                 "null"
               ]
             },
+            "trust_repository": {
+              "type": "boolean"
+            },
             "workspace_id": {
               "type": [
                 "string",
@@ -4648,6 +4916,9 @@
                 "string",
                 "null"
               ]
+            },
+            "trust_repository": {
+              "type": "boolean"
             },
             "workspace_id": {
               "type": [
@@ -4688,6 +4959,9 @@
                 "null"
               ]
             },
+            "trust_repository": {
+              "type": "boolean"
+            },
             "workspace_id": {
               "type": [
                 "string",
@@ -4701,6 +4975,9 @@
           "properties": {
             "force": {
               "default": false,
+              "type": "boolean"
+            },
+            "trust_repository": {
               "type": "boolean"
             },
             "workspace_id": {
@@ -4782,6 +5059,22 @@
         {
           "properties": {
             "method": {
+              "const": "server.ssh_agent.register",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ServerSshAgentRegisterParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "server.agent_manifests",
               "type": "string"
             },
@@ -4830,6 +5123,54 @@
         {
           "properties": {
             "method": {
+              "const": "product_announcement.dismiss",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ProductAnnouncementDismissParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "release_notes.dismiss",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ReleaseNotesDismissParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "command.invoke",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/CommandInvokeParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "client.window_title.set",
               "type": "string"
             },
@@ -4851,6 +5192,22 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/EmptyParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "client_shell.surface.set",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ClientShellSurfaceSetParams"
             }
           },
           "required": [
@@ -5518,6 +5875,22 @@
         {
           "properties": {
             "method": {
+              "const": "agent.profile.edit",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentProfileEditParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "agent.profile.delete",
               "type": "string"
             },
@@ -5790,6 +6163,102 @@
         {
           "properties": {
             "method": {
+              "const": "pane.scroll",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/PaneScrollParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "pane.clear",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/PaneTarget"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "pane.edit_scrollback",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/PaneTarget"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "pane.selection.read",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/PaneSelectionReadParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "pane.copy_motion",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/PaneCopyMotionParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "pane.copy_search",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/PaneCopySearchParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "pane.list",
               "type": "string"
             },
@@ -5870,6 +6339,38 @@
         {
           "properties": {
             "method": {
+              "const": "pane.link.activate",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/PaneLinkActivateParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "pane.link.resolve",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/PaneLinkActivateParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "pane.rename",
               "type": "string"
             },
@@ -5939,54 +6440,6 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/PaneReadParams"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "method": {
-              "const": "pane.graphics.set",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/schemas/request/$defs/PaneGraphicsSetParams"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "method": {
-              "const": "pane.graphics.clear",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/schemas/request/$defs/PaneGraphicsClearParams"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "method": {
-              "const": "pane.graphics.info",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/schemas/request/$defs/PaneTarget"
             }
           },
           "required": [
@@ -6147,6 +6600,22 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/PaneWaitForOutputParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "integration.list",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/EmptyParams"
             }
           },
           "required": [
@@ -6610,6 +7079,15 @@
             },
             "agent_status": {
               "$ref": "#/schemas/success_response/$defs/AgentStatus"
+            },
+            "completion_seq": {
+              "description": "The current idle transition completed work, independently of who has viewed it.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
             },
             "cwd": {
               "type": [
@@ -7786,6 +8264,33 @@
           ],
           "type": "object"
         },
+        "IntegrationInfo": {
+          "properties": {
+            "available": {
+              "type": "boolean"
+            },
+            "command": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "state": {
+              "$ref": "#/schemas/success_response/$defs/IntegrationState"
+            },
+            "target": {
+              "$ref": "#/schemas/success_response/$defs/IntegrationTarget"
+            }
+          },
+          "required": [
+            "target",
+            "label",
+            "command",
+            "available",
+            "state"
+          ],
+          "type": "object"
+        },
         "IntegrationInstallResult": {
           "properties": {
             "messages": {
@@ -7799,6 +8304,14 @@
             "messages"
           ],
           "type": "object"
+        },
+        "IntegrationState": {
+          "enum": [
+            "not_installed",
+            "current",
+            "outdated"
+          ],
+          "type": "string"
         },
         "IntegrationTarget": {
           "enum": [
@@ -8083,6 +8596,12 @@
             "pane_id": {
               "type": "string"
             },
+            "restore_error": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "revision": {
               "format": "uint64",
               "minimum": 0,
@@ -8269,6 +8788,35 @@
             "direction",
             "ratio",
             "rect"
+          ],
+          "type": "object"
+        },
+        "PaneLinkRegion": {
+          "description": "Inclusive display-cell columns on a pane's current viewport.",
+          "properties": {
+            "end_col": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "row": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "start_col": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "row",
+            "start_col",
+            "end_col"
           ],
           "type": "object"
         },
@@ -8624,6 +9172,41 @@
             "source_pane_id",
             "focused_pane_id",
             "layout"
+          ],
+          "type": "object"
+        },
+        "PaneTextPoint": {
+          "properties": {
+            "col": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "row": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "row",
+            "col"
+          ],
+          "type": "object"
+        },
+        "PaneTextRange": {
+          "properties": {
+            "end": {
+              "$ref": "#/schemas/success_response/$defs/PaneTextPoint"
+            },
+            "start": {
+              "$ref": "#/schemas/success_response/$defs/PaneTextPoint"
+            }
+          },
+          "required": [
+            "start",
+            "end"
           ],
           "type": "object"
         },
@@ -9680,6 +10263,29 @@
             },
             {
               "properties": {
+                "documents": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                "profile": {
+                  "$ref": "#/schemas/success_response/$defs/AgentProfileInfo"
+                },
+                "type": {
+                  "const": "agent_profile_dossier",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "profile",
+                "documents"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
                 "profiles": {
                   "items": {
                     "$ref": "#/schemas/success_response/$defs/AgentProfileInfo"
@@ -10056,103 +10662,98 @@
             },
             {
               "properties": {
-                "revision": {
-                  "format": "uint64",
-                  "minimum": 0,
-                  "type": "integer"
+                "pane_id": {
+                  "type": "string"
                 },
-                "sequence": {
-                  "format": "uint64",
-                  "minimum": 0,
-                  "type": "integer"
+                "text": {
+                  "type": "string"
                 },
                 "type": {
-                  "const": "pane_graphics_frame_ack",
+                  "const": "pane_selection",
                   "type": "string"
                 }
               },
               "required": [
                 "type",
-                "sequence",
-                "revision"
+                "pane_id",
+                "text"
               ],
               "type": "object"
             },
             {
               "properties": {
-                "cell_height_px": {
-                  "format": "uint32",
+                "content_revision": {
+                  "format": "uint64",
                   "minimum": 0,
                   "type": "integer"
                 },
-                "cell_width_px": {
-                  "format": "uint32",
-                  "minimum": 0,
-                  "type": "integer"
+                "cursor": {
+                  "$ref": "#/schemas/success_response/$defs/PaneTextPoint"
                 },
-                "file_frame_damage": {
-                  "default": false,
-                  "description": "Accepts damage metadata while still consuming a complete canonical file.",
-                  "type": "boolean"
-                },
-                "file_frame_direct_max_bytes": {
-                  "format": "uint",
-                  "minimum": 0,
-                  "type": [
-                    "integer",
-                    "null"
-                  ]
-                },
-                "file_frame_directory": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                "file_frame_formats": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "type": "array"
-                },
-                "file_frame_max_bytes": {
-                  "format": "uint",
-                  "minimum": 0,
-                  "type": [
-                    "integer",
-                    "null"
-                  ]
-                },
-                "file_frame_transport": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                "max_layers_per_pane": {
-                  "default": 0,
-                  "format": "uint",
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "pane_visible": {
-                  "description": "True only when this pane is on the currently rendered terminal surface.",
-                  "type": "boolean"
-                },
-                "pixel_mouse": {
-                  "default": false,
-                  "type": "boolean"
+                "pane_id": {
+                  "type": "string"
                 },
                 "type": {
-                  "const": "pane_graphics_info",
+                  "const": "pane_copy_motion",
                   "type": "string"
                 }
               },
               "required": [
                 "type",
-                "cell_width_px",
-                "cell_height_px",
-                "pane_visible"
+                "pane_id",
+                "cursor",
+                "content_revision"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "content_revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "current": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "current_global": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "matches": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/PaneTextRange"
+                  },
+                  "type": "array"
+                },
+                "pane_id": {
+                  "type": "string"
+                },
+                "total": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": {
+                  "const": "pane_copy_search",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "pane_id",
+                "content_revision",
+                "matches",
+                "total"
               ],
               "type": "object"
             },
@@ -10267,6 +10868,25 @@
                 "type",
                 "changed",
                 "reason"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "integrations": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/IntegrationInfo"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "integration_list",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "integrations"
               ],
               "type": "object"
             },
@@ -10494,6 +11114,47 @@
             },
             {
               "properties": {
+                "regions": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/PaneLinkRegion"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "pane_link_resolved",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "regions"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "handled": {
+                  "type": "boolean"
+                },
+                "type": {
+                  "const": "pane_link_activated",
+                  "type": "string"
+                },
+                "url": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "type",
+                "handled"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
                 "logs": {
                   "items": {
                     "$ref": "#/schemas/success_response/$defs/PluginCommandLogInfo"
@@ -10583,6 +11244,29 @@
               "type": "object"
             },
             {
+              "description": "Acknowledgement for the client-shell surface interest lease. This method is new on the\nendpoint protocol, so its revision-bearing result can establish an activation floor.",
+              "properties": {
+                "active": {
+                  "type": "boolean"
+                },
+                "projection_revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": {
+                  "const": "client_shell_surface_set",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "active",
+                "projection_revision"
+              ],
+              "type": "object"
+            },
+            {
               "properties": {
                 "type": {
                   "const": "ok",
@@ -10602,7 +11286,31 @@
               "default": false,
               "type": "boolean"
             },
+            "endpoint_protocol_generation": {
+              "description": "Stable client-owned endpoint generation supported by this server.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "health_check": {
+              "default": false,
+              "description": "Whether this server supports endpoint health probes.",
+              "type": "boolean"
+            },
             "live_handoff": {
+              "type": "boolean"
+            },
+            "ssh_agent_registration": {
+              "default": false,
+              "description": "Supports connection-scoped `server.ssh_agent.register` on the local JSON API.",
+              "type": "boolean"
+            },
+            "surface_interest": {
+              "default": false,
+              "description": "Whether this server supports explicit client-shell surface interest.",
               "type": "boolean"
             }
           },

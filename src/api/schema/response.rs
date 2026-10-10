@@ -9,7 +9,7 @@ use super::integrations::{
 use super::panes::{
     LayoutDescription, PaneEdgesResult, PaneFocusDirectionResult, PaneInfo, PaneLayoutSnapshot,
     PaneMoveResult, PaneNeighborResult, PaneProcessInfo, PaneReadResult, PaneResizeResult,
-    PaneSwapResult, PaneZoomResult,
+    PaneSwapResult, PaneTextPoint, PaneTextRange, PaneZoomResult,
 };
 use super::plugins::{
     InstalledPluginInfo, PluginActionInfo, PluginCommandLogInfo, PluginInvocationContext,
@@ -120,6 +120,10 @@ pub enum ResponseResult {
     AgentProfileInfo {
         profile: AgentProfileInfo,
     },
+    AgentProfileDossier {
+        profile: AgentProfileInfo,
+        documents: std::collections::BTreeMap<String, String>,
+    },
     AgentProfileList {
         profiles: Vec<AgentProfileInfo>,
     },
@@ -190,32 +194,24 @@ pub enum ResponseResult {
     PaneRead {
         read: PaneReadResult,
     },
-    PaneGraphicsFrameAck {
-        sequence: u64,
-        revision: u64,
+    PaneSelection {
+        pane_id: String,
+        text: String,
     },
-    PaneGraphicsInfo {
-        cell_width_px: u32,
-        cell_height_px: u32,
-        /// True only when this pane is on the currently rendered terminal surface.
-        pane_visible: bool,
+    PaneCopyMotion {
+        pane_id: String,
+        cursor: PaneTextPoint,
+        content_revision: u64,
+    },
+    PaneCopySearch {
+        pane_id: String,
+        content_revision: u64,
+        matches: Vec<PaneTextRange>,
+        total: u64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        file_frame_directory: Option<String>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        file_frame_formats: Vec<String>,
+        current: Option<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        file_frame_max_bytes: Option<usize>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        file_frame_direct_max_bytes: Option<usize>,
-        /// Accepts damage metadata while still consuming a complete canonical file.
-        #[serde(default)]
-        file_frame_damage: bool,
-        #[serde(default)]
-        max_layers_per_pane: usize,
-        #[serde(default)]
-        pixel_mouse: bool,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        file_frame_transport: Option<String>,
+        current_global: Option<u64>,
     },
     AgentExplain {
         explain: serde_json::Value,
@@ -237,6 +233,9 @@ pub enum ResponseResult {
     ClientWindowTitle {
         changed: bool,
         reason: ClientWindowTitleReason,
+    },
+    IntegrationList {
+        integrations: Vec<super::integrations::IntegrationInfo>,
     },
     IntegrationInstall {
         target: IntegrationTarget,
@@ -280,6 +279,14 @@ pub enum ResponseResult {
         context: PluginInvocationContext,
         log: PluginCommandLogInfo,
     },
+    PaneLinkResolved {
+        regions: Vec<super::panes::PaneLinkRegion>,
+    },
+    PaneLinkActivated {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        url: Option<String>,
+        handled: bool,
+    },
     PluginLogList {
         logs: Vec<PluginCommandLogInfo>,
     },
@@ -295,6 +302,12 @@ pub enum ResponseResult {
     ConfigReload {
         status: crate::config::ConfigReloadStatus,
         diagnostics: Vec<String>,
+    },
+    /// Acknowledgement for the client-shell surface interest lease. This method is new on the
+    /// endpoint protocol, so its revision-bearing result can establish an activation floor.
+    ClientShellSurfaceSet {
+        active: bool,
+        projection_revision: u64,
     },
     Ok {},
 }

@@ -1,4 +1,6 @@
-mod support;
+#![cfg(unix)]
+
+pub mod support;
 
 use std::fs;
 use std::io::{Read, Write};
@@ -13,6 +15,43 @@ use support::{
     cleanup_test_base, register_runtime_dir, register_spawned_herdr_pid,
     unregister_spawned_herdr_pid,
 };
+
+#[test]
+fn native_profile_dossier_edits_documents_and_settings_on_the_server() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config = base.join("config");
+    let runtime = base.join("runtime");
+    let socket = runtime.join("herdr.sock");
+    let server = spawn_herdr(&config, &runtime, &socket);
+    wait_for_socket(&socket, Duration::from_secs(10));
+    register_runtime_dir(&runtime);
+    let create=send_request(&socket,&serde_json::json!({"id":"create","method":"agent.profile.create","params":{"role":"reviewer","harness":"pi","native_cwd":base,"instructions":"initial"}}).to_string());
+    assert!(create.get("error").is_none(), "{create}");
+    let edited=send_request(&socket,&serde_json::json!({"id":"edit","method":"agent.profile.edit","params":{"role":"reviewer","settings":{"role":"reviewer","harness":"claude"},"documents":{"AGENTS.md":"# Review\n\nKeep every line.","context.md":"Named Markdown"}}}).to_string());
+    assert!(edited.get("error").is_none(), "{edited}");
+    assert_eq!(edited["result"]["profile"]["harness"], "claude");
+    assert_eq!(
+        edited["result"]["documents"]["AGENTS.md"],
+        "# Review\n\nKeep every line."
+    );
+    let invalid=send_request(&socket,&serde_json::json!({"id":"invalid","method":"agent.profile.edit","params":{"role":"reviewer","documents":{"../outside.md":"bad"}}}).to_string());
+    assert_eq!(invalid["error"]["code"], "invalid_md_name");
+    let read = send_request(
+        &socket,
+        r#"{"id":"read","method":"agent.profile.edit","params":{"role":"reviewer"}}"#,
+    );
+    assert_eq!(read["result"]["documents"], edited["result"]["documents"]);
+    let deleted = send_request(
+        &socket,
+        r#"{"id":"delete","method":"agent.profile.edit","params":{"role":"reviewer","delete_document":"context.md"}}"#,
+    );
+    assert!(deleted.get("error").is_none(), "{deleted}");
+    assert!(deleted["result"]["documents"].get("context.md").is_none());
+    assert!(deleted["result"]["documents"].get("AGENTS.md").is_some());
+    drop(server);
+    cleanup_test_base(&base);
+}
 
 #[test]
 fn pane_harness_override_persists_without_touching_the_running_agent() {
@@ -529,7 +568,7 @@ fn ping_over_socket_returns_version() {
     assert_eq!(value["result"]["version"], env!("CARGO_PKG_VERSION"));
     // Intentionally hardcoded so wire protocol bumps require updating this test.
     // Changing this value means old clients/servers are no longer compatible.
-    assert_eq!(value["result"]["protocol"], 21);
+    assert_eq!(value["result"]["protocol"], 22);
 
     cleanup_spawned_herdr(child, base);
 }
@@ -596,6 +635,78 @@ contains = ["server-reload-marker"]
     assert_eq!(codex["source_kind"], "local override");
     assert_eq!(codex["source"], override_path.display().to_string());
     assert!(codex.get("warning").is_none());
+
+    cleanup_spawned_herdr(child, base);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn shutdown_preserves_session_after_shell_is_signaled() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let socket_path = runtime_dir.join("herdr.sock");
+
+    let mut child = spawn_herdr_with_shell(&config_home, &runtime_dir, &socket_path, "/bin/sh");
+    wait_for_socket(&socket_path, Duration::from_secs(5));
+
+    let created = send_request(
+        &socket_path,
+        &format!(
+            r#"{{"id":"create","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+            base.display()
+        ),
+    );
+    let pane_id = created["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .expect("root pane id");
+    let process_info = send_request(
+        &socket_path,
+        &format!(
+            r#"{{"id":"process","method":"pane.process_info","params":{{"pane_id":"{pane_id}"}}}}"#
+        ),
+    );
+    let shell_pid = process_info["result"]["process_info"]["shell_pid"]
+        .as_u64()
+        .expect("shell pid") as libc::pid_t;
+
+    assert_eq!(unsafe { libc::kill(shell_pid, libc::SIGHUP) }, 0);
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let panes = send_request(
+            &socket_path,
+            r#"{"id":"panes","method":"pane.list","params":{}}"#,
+        );
+        if panes["result"]["panes"]
+            .as_array()
+            .is_some_and(Vec::is_empty)
+        {
+            break;
+        }
+        assert!(Instant::now() < deadline, "signaled pane was not removed");
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    let stopped = send_request(
+        &socket_path,
+        r#"{"id":"stop","method":"server.stop","params":{}}"#,
+    );
+    assert_eq!(stopped["result"]["type"], "ok");
+    child.child.wait().expect("server should stop cleanly");
+
+    let session: serde_json::Value = serde_json::from_slice(
+        &fs::read(config_home.join("herdr-dev/session.json")).expect("saved session"),
+    )
+    .expect("valid session json");
+    assert_eq!(session["workspaces"].as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        session["workspaces"][0]["tabs"][0]["panes"]
+            .as_object()
+            .map(serde_json::Map::len),
+        Some(1)
+    );
 
     cleanup_spawned_herdr(child, base);
 }
@@ -1275,9 +1386,11 @@ fn new_terminal_cwd_follow_ignores_nonleader_group_member_cwd() {
         ),
     );
     assert_eq!(pane["result"]["pane"]["cwd"], base.display().to_string());
+    // Regression for issue #3270: the foreground group leader's cwd is
+    // authoritative; the backgrounded helper's chdir must not override it.
     assert_eq!(
         pane["result"]["pane"]["foreground_cwd"],
-        helper_cwd.display().to_string()
+        base.display().to_string()
     );
 
     let split = send_request(

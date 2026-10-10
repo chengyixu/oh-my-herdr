@@ -4,8 +4,10 @@ use serde::{Deserialize, Serialize};
 
 const MAX_SESSION_ID_LEN: usize = 512;
 const MAX_SESSION_PATH_LEN: usize = 4096;
+const MAX_RESUME_ARGS: usize = 64;
+const MAX_RESUME_ARGV_BYTES: usize = 8192;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentSessionRef {
     pub kind: AgentSessionRefKind,
     pub value: String,
@@ -23,6 +25,67 @@ pub struct AgentResumePlan {
     pub agent: String,
     pub argv: Vec<String>,
     pub dedupe_key: String,
+}
+
+/// A resume command reported by the agent itself, run in the restored pane.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReportedAgentResume {
+    pub source: String,
+    pub agent: String,
+    pub argv: Vec<String>,
+}
+
+impl ReportedAgentResume {
+    /// The same command can name different sessions in different directories,
+    /// for example `agent --continue`, so the directory is part of its identity.
+    pub fn plan(&self, cwd: &Path) -> AgentResumePlan {
+        AgentResumePlan {
+            agent: self.agent.clone(),
+            argv: self.argv.clone(),
+            dedupe_key: format!(
+                "{}\u{0}{}\u{0}{}\u{0}argv\u{0}{}",
+                self.source,
+                self.agent,
+                cwd.display(),
+                self.argv.join("\u{0}")
+            ),
+        }
+    }
+}
+
+/// Restore types the command into the pane's shell, so the executable must be a
+/// bare command name: shells disagree on how to invoke a quoted path.
+pub fn validate_resume_argv(argv: &[String]) -> Result<(), String> {
+    let Some(command) = argv.first() else {
+        return Err("resume_argv must not be empty".into());
+    };
+    if argv.len() > MAX_RESUME_ARGS {
+        return Err(format!(
+            "resume_argv allows at most {MAX_RESUME_ARGS} arguments"
+        ));
+    }
+    if argv.iter().map(String::len).sum::<usize>() > MAX_RESUME_ARGV_BYTES {
+        return Err(format!(
+            "resume_argv allows at most {MAX_RESUME_ARGV_BYTES} bytes"
+        ));
+    }
+    if argv.iter().any(|arg| arg.chars().any(char::is_control)) {
+        return Err("resume_argv must not contain control characters".into());
+    }
+    // Restore quotes arguments POSIX-style, which PowerShell reads differently
+    // only when an argument itself contains an apostrophe.
+    if argv.iter().any(|arg| arg.contains('\'')) {
+        return Err("resume_argv must not contain apostrophes".into());
+    }
+    let plain_command = !command.is_empty()
+        && !command.starts_with('-')
+        && command
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'));
+    if !plain_command {
+        return Err("resume_argv must start with a plain command name, not a path".into());
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,6 +130,24 @@ pub fn session_ref_from_report(
     }
 
     agent_session_id.and_then(AgentSessionRef::id)
+}
+
+pub fn persisted_session_from_launch_args(
+    agent: crate::detect::Agent,
+    args: &[String],
+) -> Option<PersistedAgentSession> {
+    let [command, session_id] = args else {
+        return None;
+    };
+    if agent != crate::detect::Agent::Codex || command != "resume" || session_id.starts_with('-') {
+        return None;
+    }
+
+    Some(PersistedAgentSession {
+        source: "herdr:codex".into(),
+        agent: "codex".into(),
+        session_ref: AgentSessionRef::id(session_id.clone())?,
+    })
 }
 
 pub fn normalize_session_start_source(value: Option<String>) -> Option<String> {
@@ -207,6 +288,26 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
         ("herdr:grok", "grok", AgentSessionRefKind::Id) => {
             vec!["grok".into(), "--resume".into(), session_ref.value.clone()]
         }
+        ("herdr:letta", "letta", AgentSessionRefKind::Id) => {
+            if let Some(agent_id) = session_ref.value.strip_prefix("default:") {
+                if agent_id.is_empty() {
+                    return None;
+                }
+                vec![
+                    "letta".into(),
+                    "--conversation".into(),
+                    "default".into(),
+                    "--agent".into(),
+                    agent_id.into(),
+                ]
+            } else {
+                vec![
+                    "letta".into(),
+                    "--conversation".into(),
+                    session_ref.value.clone(),
+                ]
+            }
+        }
         _ => return None,
     };
 
@@ -244,6 +345,7 @@ pub(crate) fn is_official_agent_source(source: &str, agent: &str) -> bool {
             | ("herdr:cursor", "cursor")
             | ("herdr:antigravity_cli", "agy")
             | ("herdr:grok", "grok")
+            | ("herdr:letta", "letta")
     )
 }
 
@@ -270,6 +372,38 @@ mod tests {
             .to_string()
     }
 
+    fn argv(parts: &[&str]) -> Vec<String> {
+        parts.iter().map(|part| part.to_string()).collect()
+    }
+
+    #[test]
+    fn reported_resume_argv_requires_a_plain_command_name() {
+        assert!(validate_resume_argv(&argv(&[
+            "prime-agent",
+            "--resume",
+            "01a0de21",
+            "--model",
+            "gpt 6"
+        ]))
+        .is_ok());
+        assert!(validate_resume_argv(&argv(&["cursor-agent.cmd", "--resume", "id"])).is_ok());
+
+        for invalid in [
+            argv(&[]),
+            argv(&[""]),
+            argv(&["/usr/bin/prime-agent", "--resume", "id"]),
+            argv(&["C:\\Program Files\\Prime\\prime.exe"]),
+            argv(&["prime agent"]),
+            argv(&["-prime"]),
+            argv(&["prime-agent", "bad\nline"]),
+            argv(&["prime-agent", "--name", "can's session"]),
+            vec!["prime-agent".to_string(); MAX_RESUME_ARGS + 1],
+            argv(&["prime-agent", &"x".repeat(MAX_RESUME_ARGV_BYTES)]),
+        ] {
+            assert!(validate_resume_argv(&invalid).is_err(), "{invalid:?}");
+        }
+    }
+
     #[test]
     fn native_state_reservation_excludes_full_lifecycle_sources() {
         assert!(is_reserved_native_state_source("herdr:claude", "claude"));
@@ -280,6 +414,40 @@ mod tests {
             "herdr:opencode",
             "opencode"
         ));
+    }
+
+    #[test]
+    fn codex_noncanonical_resume_launch_has_no_explicit_session() {
+        assert_eq!(
+            persisted_session_from_launch_args(
+                crate::detect::Agent::Codex,
+                &["resume".into(), "codex-session".into()]
+            )
+            .unwrap()
+            .session_ref
+            .value,
+            "codex-session"
+        );
+        assert!(persisted_session_from_launch_args(
+            crate::detect::Agent::Codex,
+            &["resume".into(), "--last".into()]
+        )
+        .is_none());
+        assert!(persisted_session_from_launch_args(
+            crate::detect::Agent::Codex,
+            &["resume".into(), "not-a-session".into(), "--last".into()]
+        )
+        .is_none());
+        assert!(persisted_session_from_launch_args(
+            crate::detect::Agent::Codex,
+            &[
+                "--remote".into(),
+                "ws://example.test".into(),
+                "resume".into(),
+                "remote-session".into(),
+            ]
+        )
+        .is_none());
     }
 
     #[test]
@@ -464,6 +632,32 @@ mod tests {
             .argv,
             vec!["grok", "--resume", "grok-session"]
         );
+        assert_eq!(
+            plan(
+                "herdr:letta",
+                "letta",
+                &AgentSessionRef::id("conversation-123").unwrap()
+            )
+            .unwrap()
+            .argv,
+            vec!["letta", "--conversation", "conversation-123"]
+        );
+        assert_eq!(
+            plan(
+                "herdr:letta",
+                "letta",
+                &AgentSessionRef::id("default:agent-123").unwrap()
+            )
+            .unwrap()
+            .argv,
+            vec!["letta", "--conversation", "default", "--agent", "agent-123"]
+        );
+        assert!(plan(
+            "herdr:letta",
+            "letta",
+            &AgentSessionRef::id("default:").unwrap()
+        )
+        .is_none());
     }
 
     #[test]

@@ -37,6 +37,8 @@ pub(crate) struct HandoffRuntimeState {
     /// the importing server include transfer time in the recent-input guard.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_timing_captured_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_state: Option<crate::terminal::state::HandoffAgentState>,
 }
 
 #[cfg(unix)]
