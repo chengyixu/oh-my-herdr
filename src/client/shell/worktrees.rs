@@ -528,6 +528,7 @@ impl ClientShellState {
             (
                 PendingEndpointKind::NativeProfiles
                 | PendingEndpointKind::NativeProfileLoad
+                | PendingEndpointKind::NativeProfileHarness
                 | PendingEndpointKind::NativeProfileSave
                 | PendingEndpointKind::NativeHarnessPrepare
                 | PendingEndpointKind::Generic
@@ -535,6 +536,8 @@ impl ClientShellState {
                 | PendingEndpointKind::ReleaseNotesDismiss
                 | PendingEndpointKind::PopupCommand
                 | PendingEndpointKind::ReloadConfig
+                | PendingEndpointKind::HarnessIntegrationList
+                | PendingEndpointKind::HarnessIntegrationSet
                 | PendingEndpointKind::IntegrationList
                 | PendingEndpointKind::IntegrationInstall
                 | PendingEndpointKind::SelectionCopy

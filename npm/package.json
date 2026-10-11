@@ -1,7 +1,7 @@
 {
   "name": "ohmyherdr",
-  "version": "0.9.3",
-  "description": "Native agent profiles and shared coding spaces for Codex, Pi, and Claude Code.",
+  "version": "0.9.4",
+  "description": "Integration-driven terminal harnesses, native agent profiles, and shared coding spaces.",
   "keywords": [
     "coding-agents",
     "codex",

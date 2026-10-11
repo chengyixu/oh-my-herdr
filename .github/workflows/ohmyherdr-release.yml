@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Product version from Cargo.toml (for example 0.8.3)
+        description: Product version from Cargo.toml (for example 0.9.4)
         required: true
         type: string
 
@@ -82,11 +82,17 @@ jobs:
           protocol="$(sed -n 's/pub const PROTOCOL_VERSION: u32 = \([0-9][0-9]*\);/\1/p' src/protocol/wire.rs)"
           endpoint_generation="$(sed -n 's/pub const ENDPOINT_PROTOCOL_GENERATION: u32 = \([0-9][0-9]*\);/\1/p' src/protocol/endpoint.rs)"
           cat > release-notes.md <<EOF
+          ### Fixed
+          - Restored saved-agent row clicks to the launch menu: Use space cwd, Use agent native cwd, Native harness, Edit profile, and Delete profile.
+          - Fixed Settings spawn/delete shortcuts to follow the activated integration count and return to the agent pane after launching.
+          - Pinned saved-agent menu actions to the selected tab and connection; scrollbar clicks do not launch or edit a profile.
+
           ### Changed
-          - Integrated upstream Herdr v0.9.3 while retaining Ohmyherdr native agent profiles and persistent Markdown context.
-          - Added a persistent current-tab Agents view alongside grouped, priority, and saved-profile views.
-          - Added per-pane native harness controls that save the exact agent instance's next-revival choice without replacing its running process or changing sibling agents.
-          - Moved the profile editor and roster onto the client-owned UI with typed, server-owned persistence APIs.
+          - Harness pickers and profile controls now consume activated Integration metadata instead of a fixed three-harness list.
+          - Expanded the terminal-only harness catalog to 40 tools, with CLI availability and per-tool launch capabilities; desktop/browser tools are excluded.
+          - Added persistent integration activation and CLI list/activate/deactivate commands. Deactivation prevents future launches without stopping current processes or deleting profiles and documents.
+          - Simplified pane headers to Harness: current-tool; selections still apply to the exact instance's next launch or revival.
+          - Integration activation uses registry format 4, which older writers preserve without modifying.
 
           ### Distribution
           - Apple Silicon macOS binary: ${asset}.

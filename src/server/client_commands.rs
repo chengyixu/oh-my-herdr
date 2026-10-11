@@ -26,6 +26,8 @@ const CLIENT_SHELL_METHODS: &[&str] = &[
     "agent.spawn",
     "client_shell.surface.set",
     "command.invoke",
+    "integration.harness.list",
+    "integration.harness.set",
     "integration.install",
     "integration.list",
     "layout.set_split_ratio",
@@ -319,6 +321,18 @@ mod tests {
                 actual.remove(&method).as_deref(),
                 Some(digest.as_str()),
                 "fork endpoint method {method} changed"
+            );
+        }
+        let additions: BTreeMap<String, String> = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/endpoint-method-shapes-ohmyherdr-v2.json"
+        )))
+        .expect("integration activation extension contract");
+        for (method, digest) in additions {
+            assert_eq!(
+                actual.remove(&method).as_deref(),
+                Some(digest.as_str()),
+                "integration endpoint method {method} changed"
             );
         }
         assert_eq!(

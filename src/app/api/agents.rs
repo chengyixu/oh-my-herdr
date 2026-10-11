@@ -178,7 +178,7 @@ impl App {
             })
             .unwrap_or("codex")
             .to_string();
-        if !matches!(harness.as_str(), "codex" | "pi" | "claude") {
+        if crate::harness::find(&harness).is_none() {
             return encode_error(
                 id,
                 "invalid_agent_kind",
@@ -246,20 +246,28 @@ impl App {
         params: crate::api::schema::AgentHarnessSetParams,
     ) -> String {
         let harness = match params.harness {
-            Some(harness) if matches!(harness.as_str(), "codex" | "pi" | "claude") => Some(harness),
-            Some(_) => {
-                return encode_error(
-                    id,
-                    "invalid_agent_kind",
-                    "native harness must be codex, pi, or claude",
-                )
-            }
+            Some(value) => match crate::harness::find(&value) {
+                Some(harness) => Some(harness.id.to_string()),
+                None => {
+                    return encode_error(
+                        id,
+                        "invalid_agent_kind",
+                        "native harness must be a supported terminal integration",
+                    )
+                }
+            },
             None => None,
         };
         let instance_id = params.instance_id;
         let result = self.try_update_agent_registry(|registry| {
+            if harness
+                .as_ref()
+                .is_some_and(|h| registry.harness_activations.get(h) == Some(&false))
+            {
+                return Err("integration_inactive");
+            }
             let Some(entry) = registry.roster.get_mut(&instance_id) else {
-                return Err(());
+                return Err("agent_instance_not_found");
             };
             entry.harness_override = harness.clone();
             Ok(())
@@ -272,10 +280,14 @@ impl App {
                     harness_override: harness,
                 },
             ),
-            Ok(Err(())) => encode_error(
+            Ok(Err(code)) => encode_error(
                 id,
-                "agent_instance_not_found",
-                "exact agent instance was not found",
+                code,
+                if code == "integration_inactive" {
+                    "activate this integration before selecting its harness"
+                } else {
+                    "exact agent instance was not found"
+                },
             ),
             Err(err) => encode_error(id, "agent_profile_persist_failed", err.to_string()),
         }

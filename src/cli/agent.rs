@@ -50,7 +50,7 @@ pub(super) fn run_agent_command(args: &[String]) -> std::io::Result<i32> {
 fn agent_create(args: &[String]) -> std::io::Result<i32> {
     let Some(role) = args.first() else {
         eprintln!(
-            "usage: herdr agent create <ROLE> --harness <codex|pi|claude> --cwd <DIR> [--instructions-file <PATH>]"
+            "usage: herdr agent create <ROLE> --harness <HARNESS> --cwd <DIR> [--instructions-file <PATH>]"
         );
         return Ok(2);
     };
@@ -79,10 +79,6 @@ fn agent_create(args: &[String]) -> std::io::Result<i32> {
         eprintln!("--harness is required");
         return Ok(2);
     };
-    if !matches!(harness.as_str(), "codex" | "pi" | "claude") {
-        eprintln!("invalid --harness: {harness} (expected codex, pi, or claude)");
-        return Ok(2);
-    }
     let Some(native_cwd) = native_cwd else {
         eprintln!("--cwd is required");
         return Ok(2);
@@ -1242,7 +1238,7 @@ fn print_agent_help() {
     eprintln!("  herdr agent prompt <target> <text> [--wait] [--until STATUS]... [--timeout MS]");
     eprintln!("  herdr agent broadcast <role> <text>");
     eprintln!("  herdr agent roster");
-    eprintln!("  herdr agent create <role> --harness codex|pi|claude --cwd DIR [--instructions-file PATH]");
+    eprintln!("  herdr agent create <role> --harness HARNESS --cwd DIR [--instructions-file PATH]");
     eprintln!("  herdr agent profile <role>");
     eprintln!("  herdr agent profile delete <role>");
     eprintln!("  herdr agent profiles");

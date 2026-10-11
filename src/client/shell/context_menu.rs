@@ -4,14 +4,28 @@ impl ClientContextMenuOverlay {
     pub(super) fn items(&self) -> Vec<ClientContextMenuItem> {
         use ClientContextMenuAction as Action;
 
-        let item = |label, action| ClientContextMenuItem { label, action };
+        let item = |label: &str, action| ClientContextMenuItem {
+            label: label.into(),
+            action,
+        };
         match &self.target {
-            ClientContextMenuTarget::AgentHarness { .. } => vec![
-                item("Use profile harness", Action::ProfileDefault),
-                item("codex", Action::CodexHarness),
-                item("pi", Action::PiHarness),
-                item("claude", Action::ClaudeHarness),
+            ClientContextMenuTarget::AgentProfile { .. } => vec![
+                item("Use space cwd", Action::SpawnProfileSpace),
+                item("Use agent native cwd", Action::SpawnProfileNative),
+                item("Native harness...", Action::NativeHarness),
+                item("Edit profile", Action::EditProfile),
+                item("Delete profile", Action::DeleteProfile),
             ],
+            ClientContextMenuTarget::AgentHarness { harnesses, .. } => {
+                std::iter::once(item("Profile default (on revival)", Action::ProfileDefault))
+                    .chain(
+                        harnesses
+                            .iter()
+                            .enumerate()
+                            .map(|(index, harness)| item(harness, Action::SetHarness(index))),
+                    )
+                    .collect()
+            }
             ClientContextMenuTarget::Workspace { is_git: false, .. } => {
                 vec![item("Rename", Action::Rename), item("Close", Action::Close)]
             }
@@ -201,11 +215,43 @@ impl ClientShellState {
             return;
         };
         match menu.target {
-            ClientContextMenuTarget::AgentHarness { instance_id } => {
+            ClientContextMenuTarget::AgentProfile {
+                role,
+                tab_id,
+                endpoint_id,
+            } => {
+                if endpoint_id != self.active_endpoint_id {
+                    self.set_endpoint_error(
+                        "The selected saved agent belongs to another connection",
+                    );
+                    outcome.repaint = true;
+                    return;
+                }
+                match action {
+                    ClientContextMenuAction::SpawnProfileSpace => {
+                        self.spawn_native_profile(role, Some(tab_id), "tab", outcome)
+                    }
+                    ClientContextMenuAction::SpawnProfileNative => {
+                        self.spawn_native_profile(role, Some(tab_id), "agent", outcome)
+                    }
+                    ClientContextMenuAction::NativeHarness => self.load_native_profile_with_kind(
+                        role,
+                        PendingEndpointKind::NativeProfileHarness,
+                        outcome,
+                    ),
+                    ClientContextMenuAction::EditProfile => self.load_native_profile(role, outcome),
+                    ClientContextMenuAction::DeleteProfile => {
+                        self.delete_native_profile(role, outcome)
+                    }
+                    _ => {}
+                }
+            }
+            ClientContextMenuTarget::AgentHarness {
+                instance_id,
+                harnesses,
+            } => {
                 let harness = match action {
-                    ClientContextMenuAction::CodexHarness => Some("codex".into()),
-                    ClientContextMenuAction::PiHarness => Some("pi".into()),
-                    ClientContextMenuAction::ClaudeHarness => Some("claude".into()),
+                    ClientContextMenuAction::SetHarness(index) => harnesses.get(index).cloned(),
                     _ => None,
                 };
                 self.push_endpoint_method(

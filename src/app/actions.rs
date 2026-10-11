@@ -3695,10 +3695,19 @@ mod tests {
     }
 
     fn report_custom_agent_with_resume(state: &mut AppState, pane_id: PaneId, argv: &[&str]) {
+        report_named_agent_with_resume(state, pane_id, "prime-agent", argv);
+    }
+
+    fn report_named_agent_with_resume(
+        state: &mut AppState,
+        pane_id: PaneId,
+        label: &str,
+        argv: &[&str],
+    ) {
         state.handle_app_event(AppEvent::HookStateReported {
             pane_id,
-            source: "prime-agent".into(),
-            agent_label: "prime-agent".into(),
+            source: label.into(),
+            agent_label: label.into(),
             state: AgentState::Idle,
             message: None,
             seq: Some(1),
@@ -3706,8 +3715,8 @@ mod tests {
         });
         state.handle_app_event(AppEvent::AgentResumeReported {
             pane_id,
-            source: "prime-agent".into(),
-            agent_label: "prime-agent".into(),
+            source: label.into(),
+            agent_label: label.into(),
             seq: Some(1),
             argv: argv.iter().map(|part| part.to_string()).collect(),
         });
@@ -3826,7 +3835,14 @@ mod tests {
     fn shell_return_drops_self_reported_agent_and_its_resume() {
         let mut state = app_with_workspaces(&["one"]);
         let (pane_id, terminal_id) = first_pane_terminal(&state);
-        report_custom_agent_with_resume(&mut state, pane_id, &["prime-agent", "--resume", "a"]);
+        // Prime Agent is now recognized by process; exercise this invariant
+        // with a genuinely custom reporter rather than a catalog member.
+        report_named_agent_with_resume(
+            &mut state,
+            pane_id,
+            "custom-tui-fixture",
+            &["custom-tui-fixture", "--resume", "a"],
+        );
         assert!(state.terminals[&terminal_id].self_reported_agent_active());
 
         state.handle_app_event(AppEvent::ReportedAgentShellReturned {

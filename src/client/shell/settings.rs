@@ -41,6 +41,7 @@ impl ClientShellState {
             selected: theme_index(&self.config.theme_name),
             original_theme_name: self.config.theme_name.clone(),
             original_palette: self.config.palette.clone(),
+            harness_integrations: self.harness_integrations.clone(),
             integrations: Vec::new(),
             integration_messages: Vec::new(),
             loading_integrations: false,
@@ -103,11 +104,24 @@ impl ClientShellState {
     fn settings_choice_count(&self) -> usize {
         match self.overlay.as_ref() {
             Some(ClientShellOverlay::Settings(settings)) => match settings.section {
-                ClientSettingsSection::Agents => settings.profiles.len() + 3,
+                ClientSettingsSection::Agents => {
+                    settings.profiles.len()
+                        + settings
+                            .harness_integrations
+                            .iter()
+                            .filter(|h| h.active && h.available)
+                            .count()
+                }
                 ClientSettingsSection::Theme => crate::config::THEME_NAMES.len(),
                 ClientSettingsSection::Indicators | ClientSettingsSection::Sound => 2,
                 ClientSettingsSection::Toast => 4,
-                ClientSettingsSection::Integrations => settings.integrations.len(),
+                ClientSettingsSection::Integrations => {
+                    if settings.harness_integrations.is_empty() {
+                        settings.integrations.len()
+                    } else {
+                        settings.harness_integrations.len()
+                    }
+                }
             },
             _ => 0,
         }
@@ -237,11 +251,18 @@ impl ClientShellState {
                     outcome,
                 );
             }
-            ClientSettingsSection::Integrations => self.install_recommended_integrations(outcome),
+            ClientSettingsSection::Integrations => {
+                if self.harness_integrations.is_empty() {
+                    self.install_recommended_integrations(outcome);
+                } else {
+                    self.toggle_harness_integration(outcome);
+                }
+            }
         }
     }
 
     fn queue_integration_list(&mut self, outcome: &mut ClientShellInput, clear_messages: bool) {
+        self.queue_harness_integrations(outcome);
         if let Some(ClientShellOverlay::Settings(settings)) = self.overlay.as_mut() {
             settings.loading_integrations = true;
             if clear_messages {
@@ -305,6 +326,10 @@ impl ClientShellState {
         result: Result<crate::api::schema::ResponseResult, ClientShellEndpointError>,
     ) -> (bool, Vec<ClientShellAction>) {
         match kind {
+            PendingEndpointKind::HarnessIntegrationList
+            | PendingEndpointKind::HarnessIntegrationSet => {
+                self.handle_harness_integration_result(result)
+            }
             PendingEndpointKind::IntegrationList => {
                 if let Some(ClientShellOverlay::Settings(settings)) = self.overlay.as_mut() {
                     settings.loading_integrations = false;
@@ -407,6 +432,19 @@ impl ClientShellState {
         if matches!(code, KeyCode::Down | KeyCode::Char('j')) && modifiers.is_empty() {
             self.move_settings_selection(1);
             outcome.repaint = true;
+            return true;
+        }
+        if code == KeyCode::Char('i')
+            && modifiers.is_empty()
+            && matches!(
+                self.overlay,
+                Some(ClientShellOverlay::Settings(ClientSettingsOverlay {
+                    section: ClientSettingsSection::Integrations,
+                    ..
+                }))
+            )
+        {
+            self.install_recommended_integrations(outcome);
             return true;
         }
         if matches!(code, KeyCode::Enter | KeyCode::Char(' ')) && modifiers.is_empty() {

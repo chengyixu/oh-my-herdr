@@ -382,19 +382,18 @@ fn agent_command() -> Command {
             Command::new("create")
                 .about("Create a saved native agent profile with its own AGENTS.md")
                 .override_usage(
-                    "herdr agent create <ROLE> --harness <codex|pi|claude> --cwd <DIR> [--instructions-file <PATH>]",
+                    "herdr agent create <ROLE> --harness <HARNESS> --cwd <DIR> [--instructions-file <PATH>]",
                 )
                 .arg(required("role", "ROLE"))
                 .arg(
                     option("harness", "HARNESS")
                         .required(true)
-                        .value_parser(["codex", "pi", "claude"])
-                        .help("Native interactive harness for this profile"),
+                        .help("Choose an activated integration from `herdr integration list`"),
                 )
                 .arg(path_option("cwd", "DIR").required(true))
                 .arg(path_option("instructions-file", "PATH"))
                 .after_help(
-                    "Herdr creates a session-owned AGENTS.md for this profile and injects it into the selected harness. The response includes its exact path; edit that file to change this agent's persistent instructions.",
+                    "Herdr keeps profile documents in its document cabinet. Integrations that support profile instructions inject them on launch; others use their own native context. Use integration list to inspect capabilities.",
                 ),
         )
         .subcommand(
@@ -846,7 +845,21 @@ fn session_command() -> Command {
 
 fn integration_command() -> Command {
     Command::new("integration")
-        .about("Manage built-in agent integrations")
+        .about("Manage agent integrations and terminal harness activation")
+        .subcommand(
+            Command::new("list")
+                .about("List terminal integrations, activation and CLI availability"),
+        )
+        .subcommand(
+            Command::new("activate")
+                .about("Enable a terminal integration for future launches")
+                .arg(required("target", "TARGET")),
+        )
+        .subcommand(
+            Command::new("deactivate")
+                .about("Disable future launches without stopping running agents")
+                .arg(required("target", "TARGET")),
+        )
         .subcommand(
             Command::new("install")
                 .about("Install an integration")

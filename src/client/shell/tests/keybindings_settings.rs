@@ -874,6 +874,134 @@ fn current_tab_agent_mode_excludes_other_tabs_in_client() {
     assert_eq!(ids, vec![first.pane_id]);
 }
 
+fn harness_integration_fixture(
+    id: &str,
+    active: bool,
+) -> crate::api::schema::HarnessIntegrationInfo {
+    crate::api::schema::HarnessIntegrationInfo {
+        id: id.into(),
+        label: format!("{id} tool"),
+        command: id.into(),
+        active,
+        available: true,
+        hook_target: None,
+        hook_state: None,
+        installer: None,
+        profile_instructions: false,
+        capabilities: Default::default(),
+    }
+}
+
+#[test]
+fn terminal_harness_picker_and_profiles_follow_activation_including_unfamiliar_ids() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    let mut future = harness_integration_fixture("future-cli", true);
+    future.capabilities.model = true;
+    state.handle_harness_integration_result(Ok(
+        crate::api::schema::ResponseResult::HarnessIntegrationList {
+            integrations: vec![future, harness_integration_fixture("disabled-cli", false)],
+        },
+    ));
+    state.open_settings_overlay();
+    if let Some(ClientShellOverlay::Settings(settings)) = state.overlay.as_mut() {
+        settings.section = ClientSettingsSection::Agents;
+    }
+    state.activate_native_profile(&mut ClientShellInput::default());
+    let Some(ClientShellOverlay::Settings(settings)) = state.overlay.as_mut() else {
+        panic!("profile form")
+    };
+    let form = settings.profile_form.as_mut().unwrap();
+    assert_eq!(form.harness, "future-cli");
+    assert_eq!(form.harness_choices, ["future-cli"]);
+    form.existing_role = Some("future-profile".into());
+    assert!(form.field_enabled(2));
+    assert!(!form.field_enabled(3));
+    state.handle_native_profile_result(
+        PendingEndpointKind::NativeHarnessPrepare,
+        Ok(crate::api::schema::ResponseResult::AgentHarnessSet {
+            instance_id: "reviewer:1".into(),
+            harness_override: Some("future-cli".into()),
+        }),
+    );
+    let Some(ClientShellOverlay::ContextMenu(menu)) = state.overlay.as_ref() else {
+        panic!("harness menu")
+    };
+    assert_eq!(
+        menu.items()
+            .iter()
+            .map(|item| item.label.as_str())
+            .collect::<Vec<_>>(),
+        ["Profile default (on revival)", "future-cli"]
+    );
+    let mut outcome = ClientShellInput::default();
+    state.activate_context_menu_item(1, &mut outcome);
+    let [ClientShellAction::Endpoint { request, .. }] = outcome.actions.as_slice() else {
+        panic!("typed harness selection")
+    };
+    let crate::api::schema::Method::AgentHarnessSet(params) = &request.method else {
+        panic!("harness set API")
+    };
+    assert_eq!(params.harness.as_deref(), Some("future-cli"));
+    state.handle_harness_integration_result(Ok(
+        crate::api::schema::ResponseResult::HarnessIntegrationSet {
+            integration: harness_integration_fixture("future-cli", false),
+        },
+    ));
+    assert!(state.active_harness_choices().is_empty());
+}
+
+#[test]
+fn terminal_integration_lists_keep_the_last_selection_visible_and_mouse_addressable() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    state.handle_harness_integration_result(Ok(
+        crate::api::schema::ResponseResult::HarnessIntegrationList {
+            integrations: (0..45)
+                .map(|index| harness_integration_fixture(&format!("cli-{index}"), true))
+                .collect(),
+        },
+    ));
+    state.open_settings_overlay();
+    if let Some(ClientShellOverlay::Settings(settings)) = state.overlay.as_mut() {
+        settings.section = ClientSettingsSection::Integrations;
+        settings.selected = 44;
+    }
+    let frame = state.compose(120, 24).unwrap();
+    let text = frame
+        .cells
+        .iter()
+        .map(|cell| cell.symbol.as_str())
+        .collect::<String>();
+    assert!(text.contains("cli-44 tool"));
+    assert!(state
+        .hits
+        .settings_choices
+        .iter()
+        .any(|(_, index)| *index == 44));
+    state.handle_native_profile_result(
+        PendingEndpointKind::NativeHarnessPrepare,
+        Ok(crate::api::schema::ResponseResult::AgentHarnessSet {
+            instance_id: "reviewer:1".into(),
+            harness_override: Some("cli-44".into()),
+        }),
+    );
+    let frame = state.compose(120, 16).unwrap();
+    let text = frame
+        .cells
+        .iter()
+        .map(|cell| cell.symbol.as_str())
+        .collect::<String>();
+    assert!(text.contains("cli-44"));
+    assert!(state
+        .hits
+        .context_menu_rows
+        .iter()
+        .any(|(_, index)| *index == 45));
+}
+
 #[test]
 fn native_profile_client_edits_multiline_documents_and_saves_typed_api_patch() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
@@ -942,6 +1070,215 @@ fn native_profile_client_edits_multiline_documents_and_saves_typed_api_patch() {
         Some(ClientShellOverlay::Settings(s)) => assert_eq!(s.profile_form, before),
         _ => panic!("failed save keeps draft"),
     };
+}
+
+fn saved_profile_click_fixture() -> ClientShellState {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut snap = snapshot();
+    snap.tabs[0].tab_id = "tab_in_selected_space".into();
+    snap.focused_tab_id = Some("tab_in_selected_space".into());
+    snap.workspaces[0].active_tab_id = "tab_in_selected_space".into();
+    snap.panes[0].tab_id = "tab_in_selected_space".into();
+    state.set_snapshot(Box::new(snap));
+    state.set_pane_surface(surface());
+    state.config.agent_panel_sort = crate::config::AgentPanelSortConfig::Agents;
+    state.sidebar_width = 36;
+    state.sidebar_width_manual = true;
+    state.handle_native_profile_result(
+        PendingEndpointKind::NativeProfiles,
+        Ok(crate::api::schema::ResponseResult::AgentProfileList {
+            profiles: vec![crate::api::schema::AgentProfileInfo {
+                role: "reviewer".into(),
+                native_cwd: "/different/native-cwd".into(),
+                native_cwd_seeded: true,
+                mds: Vec::new(),
+                harness: "pi".into(),
+                model: None,
+                effort: None,
+                apikey_ref: None,
+                allowlist: None,
+                replicas_assigned: 0,
+                created_at: 0,
+                last_spawned_at: None,
+            }],
+        }),
+    );
+    state.compose(106, 30).unwrap();
+    state
+}
+
+#[test]
+fn saved_profile_sidebar_click_restores_space_and_native_cwd_spawn_actions() {
+    for (index, cwd_mode) in [(0, "tab"), (1, "agent")] {
+        let mut state = saved_profile_click_fixture();
+        let rect = state.hits.saved_profiles[0].0;
+        let click = state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: rect.x + 1,
+            row: rect.y,
+            modifiers: KeyModifiers::empty(),
+        })]);
+        assert!(
+            click.actions.is_empty(),
+            "opening the launch menu must not request the settings editor"
+        );
+        let Some(ClientShellOverlay::ContextMenu(menu)) = state.overlay.as_ref() else {
+            panic!("saved agent click should open its launch menu")
+        };
+        let labels = menu
+            .items()
+            .into_iter()
+            .map(|item| item.label)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            labels,
+            [
+                "Use space cwd",
+                "Use agent native cwd",
+                "Native harness...",
+                "Edit profile",
+                "Delete profile"
+            ]
+        );
+        state.compose(106, 30).unwrap();
+        let row = state.hits.context_menu_rows[index].0;
+        let selected = state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: row.x + 1,
+            row: row.y,
+            modifiers: KeyModifiers::empty(),
+        })]);
+        let [ClientShellAction::Endpoint { request, .. }] = selected.actions.as_slice() else {
+            panic!("one spawn request")
+        };
+        let crate::api::schema::Method::AgentSpawn(params) = &request.method else {
+            panic!("saved agent must spawn, not load its editor")
+        };
+        assert_eq!(params.role, "reviewer");
+        assert_eq!(params.tab_id.as_deref(), Some("tab_in_selected_space"));
+        assert_eq!(params.cwd_mode, cwd_mode);
+        assert_eq!(
+            params.kind, None,
+            "launch settings must come from the saved profile"
+        );
+        assert!(state.overlay.is_none());
+    }
+}
+
+#[test]
+fn saved_profile_sidebar_edit_actions_are_explicit_and_do_not_spawn() {
+    for (index, expected_field) in [(2, 0), (3, 7)] {
+        let mut state = saved_profile_click_fixture();
+        let rect = state.hits.saved_profiles[0].0;
+        state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Right),
+            column: rect.x + 1,
+            row: rect.y,
+            modifiers: KeyModifiers::empty(),
+        })]);
+        assert!(matches!(
+            state.overlay,
+            Some(ClientShellOverlay::ContextMenu(_))
+        ));
+        let mut outcome = ClientShellInput::default();
+        state.activate_context_menu_item(index, &mut outcome);
+        let [ClientShellAction::Endpoint { request, .. }] = outcome.actions.as_slice() else {
+            panic!("explicit profile edit")
+        };
+        let crate::api::schema::Method::AgentProfileEdit(params) = &request.method else {
+            panic!("editing must not spawn an agent")
+        };
+        assert_eq!(params.role, "reviewer");
+        let profile = state.native_profiles[0].clone();
+        state.handle_native_profile_result(
+            if index == 2 {
+                PendingEndpointKind::NativeProfileHarness
+            } else {
+                PendingEndpointKind::NativeProfileLoad
+            },
+            Ok(crate::api::schema::ResponseResult::AgentProfileDossier {
+                profile,
+                documents: [("AGENTS.md".into(), "Instructions".into())]
+                    .into_iter()
+                    .collect(),
+            }),
+        );
+        let Some(ClientShellOverlay::Settings(settings)) = state.overlay.as_ref() else {
+            panic!("explicit editor")
+        };
+        assert_eq!(
+            settings.profile_form.as_ref().unwrap().selected_field,
+            expected_field
+        );
+    }
+}
+
+#[test]
+fn saved_profile_sidebar_menu_cannot_spawn_on_a_different_endpoint() {
+    let mut state = saved_profile_click_fixture();
+    let rect = state.hits.saved_profiles[0].0;
+    state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: rect.x + 1,
+        row: rect.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    let remote = SavedSshEndpoint::new("Remote", "dev@remote.example", "agents").unwrap();
+    state.active_endpoint_id = ClientEndpointId::Ssh(remote.id);
+    let mut outcome = ClientShellInput::default();
+    state.activate_context_menu_item(0, &mut outcome);
+    assert!(outcome.actions.is_empty());
+    assert!(state.overlay.is_none());
+}
+
+#[test]
+fn saved_profile_sidebar_scrollbar_right_click_never_opens_a_launch_menu() {
+    let mut state = saved_profile_click_fixture();
+    let row = state.hits.saved_profiles[0].0;
+    state.hits.agent_scrollbar = Rect::new(row.right() - 1, row.y, 1, 1);
+    let outcome = state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Right),
+        column: row.right() - 1,
+        row: row.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    assert!(outcome.actions.is_empty());
+    assert!(state.overlay.is_none());
+}
+
+#[test]
+fn saved_profile_settings_spawn_uses_activated_integration_count() {
+    for count in [0, 1, 5] {
+        let mut state = saved_profile_click_fixture();
+        state.handle_harness_integration_result(Ok(
+            crate::api::schema::ResponseResult::HarnessIntegrationList {
+                integrations: (0..count)
+                    .map(|index| harness_integration_fixture(&format!("tool-{index}"), true))
+                    .collect(),
+            },
+        ));
+        state.open_settings_overlay();
+        if let Some(ClientShellOverlay::Settings(settings)) = state.overlay.as_mut() {
+            settings.section = ClientSettingsSection::Agents;
+            settings.selected = count;
+        }
+        let spawned = state.handle_input_bytes(b"s");
+        let [ClientShellAction::Endpoint { request, .. }] = spawned.actions.as_slice() else {
+            panic!(
+                "spawn shortcut must address the selected saved profile for {count} integrations"
+            )
+        };
+        let crate::api::schema::Method::AgentSpawn(params) = &request.method else {
+            panic!("spawn API")
+        };
+        assert_eq!(params.role, "reviewer");
+        assert_eq!(params.tab_id.as_deref(), Some("tab_in_selected_space"));
+        assert_eq!(params.cwd_mode, "tab");
+        assert!(
+            state.overlay.is_none(),
+            "spawning returns to the agent pane"
+        );
+    }
 }
 
 #[test]

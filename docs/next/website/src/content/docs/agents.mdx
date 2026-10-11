@@ -7,6 +7,26 @@ Herdr is built for running more than one coding agent at a time. Each agent stay
 
 To coordinate agents from scripts or from another agent, see [Agent automation](/docs/agent-automation/).
 
+## Activated terminal integrations
+
+Ohmyherdr's **Integrations** settings are the source of choices in the profile editor and pane harness menu. Select a tool and activate or deactivate it with a click, Enter, or Space. The CLI exposes the same state:
+
+```bash
+ohmyherdr integration list
+ohmyherdr integration activate opencode
+ohmyherdr integration deactivate opencode
+```
+
+Installing a CLI and activating its integration are separate actions. Missing CLIs remain visible with an installation instruction, but cannot be activated. Existing installed hooks and saved profiles retain their availability during migration. An explicit deactivation takes precedence: it prevents future launches and revival without stopping a running process or deleting profiles and documents.
+
+Profile fields follow the selected integration's capabilities. Where profile instructions are supported, the integration supplies the native launch arguments. Other tools use their native context settings; their saved profile documents stay in the cabinet and the editor labels this behavior. Press `i` in Integrations to install or repair supported status hooks independently of activation.
+
+The terminal catalog includes the existing agents plus MiMo Code, StepCode, OmO, Goose, Crush, DeepSeek Harness, Command Code, Prime Agent, Empryo, Ante, jcode, MiniMax Code, CodeBuddy Code, AtomCode, Snow CLI, and Qoder CLI China. Desktop editors, browser agents, and gateways are excluded. Launch support does not imply a new screen detection manifest or lifecycle hook.
+
+Click a saved agent in the **Agents** panel to open its launch menu. **Use space cwd** starts it in the selected space's tab directory; **Use agent native cwd** starts it in the profile's saved directory while keeping it in that space. The menu's **Native harness...**, **Edit profile**, and **Delete profile** entries are explicit management actions. The Settings `s` spawn shortcut uses the same launch request and follows the activated integration list.
+
+The pane control shows the current process as `Harness: pi`. Its menu applies a selection to the exact instance's next launch or revival. It does not convert a running session or change sibling agents. Long menus and integration lists scroll to keep the selected item visible.
+
 ## Supported agents
 
 Agents get Herdr support in one of two ways: Herdr supports them, or they support Herdr themselves. Either way you see each agent's `idle`, `working`, and `blocked` state, get notified when it finishes or needs you, and can wait on it from scripts.

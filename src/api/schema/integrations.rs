@@ -80,3 +80,25 @@ pub struct IntegrationInstallResult {
 pub struct IntegrationUninstallResult {
     pub messages: Vec<String>,
 }
+
+/// Additive catalog: the published IntegrationTarget enum remains frozen.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct HarnessIntegrationInfo {
+    pub id: String,
+    pub label: String,
+    pub command: String,
+    pub available: bool,
+    pub active: bool,
+    pub hook_target: Option<IntegrationTarget>,
+    pub hook_state: Option<IntegrationState>,
+    pub installer: Option<String>,
+    pub profile_instructions: bool,
+    #[serde(default)]
+    pub capabilities: crate::agent_registry::NativeHarnessCapabilities,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct IntegrationHarnessSetParams {
+    pub target: String,
+    pub active: bool,
+}

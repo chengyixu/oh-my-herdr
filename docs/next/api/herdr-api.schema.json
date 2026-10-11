@@ -1268,7 +1268,7 @@
           "description": "Create a named profile with a session-owned `AGENTS.md` instruction file.\nThe file is injected by every supported native harness and remains attached\nto the profile if its harness is changed later.",
           "properties": {
             "harness": {
-              "description": "Native harness to use for this profile (`codex`, `pi`, or `claude`).",
+              "description": "Native harness provided by an activated terminal integration.",
               "type": "string"
             },
             "instructions": {
@@ -2459,6 +2459,21 @@
           },
           "required": [
             "match_event"
+          ],
+          "type": "object"
+        },
+        "IntegrationHarnessSetParams": {
+          "properties": {
+            "active": {
+              "type": "boolean"
+            },
+            "target": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "target",
+            "active"
           ],
           "type": "object"
         },
@@ -6611,6 +6626,38 @@
         {
           "properties": {
             "method": {
+              "const": "integration.harness.list",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/EmptyParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "integration.harness.set",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/IntegrationHarnessSetParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "integration.list",
               "type": "string"
             },
@@ -8165,6 +8212,74 @@
           ],
           "type": "string"
         },
+        "HarnessIntegrationInfo": {
+          "description": "Additive catalog: the published IntegrationTarget enum remains frozen.",
+          "properties": {
+            "active": {
+              "type": "boolean"
+            },
+            "available": {
+              "type": "boolean"
+            },
+            "capabilities": {
+              "$ref": "#/schemas/success_response/$defs/NativeHarnessCapabilities",
+              "default": {
+                "api_key_ref": false,
+                "auto_approved_tools": false,
+                "effort": false,
+                "model": false,
+                "tool_allowlist": false
+              }
+            },
+            "command": {
+              "type": "string"
+            },
+            "hook_state": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/IntegrationState"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "hook_target": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/IntegrationTarget"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "installer": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "label": {
+              "type": "string"
+            },
+            "profile_instructions": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "id",
+            "label",
+            "command",
+            "available",
+            "active",
+            "profile_instructions"
+          ],
+          "type": "object"
+        },
         "InstalledPluginInfo": {
           "properties": {
             "actions": {
@@ -8453,6 +8568,32 @@
               "type": "object"
             }
           ]
+        },
+        "NativeHarnessCapabilities": {
+          "description": "Native CLI capabilities shared by launch validation and profile controls.",
+          "properties": {
+            "api_key_ref": {
+              "default": false,
+              "type": "boolean"
+            },
+            "auto_approved_tools": {
+              "default": false,
+              "type": "boolean"
+            },
+            "effort": {
+              "default": false,
+              "type": "boolean"
+            },
+            "model": {
+              "default": false,
+              "type": "boolean"
+            },
+            "tool_allowlist": {
+              "default": false,
+              "type": "boolean"
+            }
+          },
+          "type": "object"
         },
         "NotificationShowReason": {
           "enum": [
@@ -10204,6 +10345,41 @@
               "required": [
                 "type",
                 "entries"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "integrations": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/HarnessIntegrationInfo"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "harness_integration_list",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "integrations"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "integration": {
+                  "$ref": "#/schemas/success_response/$defs/HarnessIntegrationInfo"
+                },
+                "type": {
+                  "const": "harness_integration_set",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "integration"
               ],
               "type": "object"
             },

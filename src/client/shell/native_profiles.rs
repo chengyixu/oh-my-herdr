@@ -25,6 +25,8 @@ pub struct AgentProfileForm {
     pub existing_role: Option<String>,
     pub role: String,
     pub harness: String,
+    pub harness_choices: Vec<String>,
+    pub harness_settings: Vec<crate::api::schema::HarnessIntegrationInfo>,
     pub native_cwd: String,
     /// Empty means the harness default is used.
     pub model: String,
@@ -63,12 +65,33 @@ impl AgentProfileForm {
         }
     }
 
+    pub fn capabilities(&self) -> crate::agent_registry::NativeHarnessCapabilities {
+        self.harness_settings
+            .iter()
+            .find(|h| h.id == self.harness)
+            .map(|h| h.capabilities)
+            .unwrap_or_else(|| crate::agent_registry::native_harness_capabilities(&self.harness))
+    }
+
+    pub fn profile_instructions_supported(&self) -> bool {
+        self.harness_settings
+            .iter()
+            .find(|h| h.id == self.harness)
+            .map(|h| h.profile_instructions)
+            .unwrap_or_else(|| {
+                crate::harness::find(&self.harness)
+                    .is_some_and(|h| h.instructions != crate::harness::Instructions::Native)
+            })
+    }
+
     pub fn field_enabled(&self, field: usize) -> bool {
         if self.is_new() {
             return field < self.field_count();
         }
-        let capabilities = crate::agent_registry::native_harness_capabilities(&self.harness);
+        let capabilities = self.capabilities();
         match field {
+            2 => capabilities.model,
+            3 => capabilities.effort,
             4 => capabilities.api_key_ref,
             5 => capabilities.tool_allowlist,
             _ => field < self.field_count(),
@@ -304,17 +327,20 @@ fn move_agent_profile_instruction_cursor(form: &mut AgentProfileForm, forward: b
 
     let harness_field = if form.is_new() { 1 } else { 0 };
     if form.selected_field == harness_field {
-        const HARNESSES: [&str; 3] = ["codex", "pi", "claude"];
-        let current = HARNESSES
+        let harnesses = &form.harness_choices;
+        if harnesses.is_empty() {
+            return;
+        }
+        let current = harnesses
             .iter()
-            .position(|harness| *harness == form.harness)
-            .unwrap_or(0);
-        let next = if forward {
-            (current + 1) % HARNESSES.len()
-        } else {
-            (current + HARNESSES.len() - 1) % HARNESSES.len()
+            .position(|harness| *harness == form.harness);
+        let next = match current {
+            Some(current) if forward => (current + 1) % harnesses.len(),
+            Some(current) => (current + harnesses.len() - 1) % harnesses.len(),
+            None if forward => 0,
+            None => harnesses.len() - 1,
         };
-        form.harness = HARNESSES[next].to_string();
+        form.harness = harnesses[next].clone();
         return;
     }
 

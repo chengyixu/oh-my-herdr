@@ -7,6 +7,9 @@ pub(super) fn run_integration_command(args: &[String]) -> std::io::Result<i32> {
     };
 
     match subcommand {
+        "list" => integration_catalog(&args[1..]),
+        "activate" => integration_activation(&args[1..], true),
+        "deactivate" => integration_activation(&args[1..], false),
         "install" => integration_install(&args[1..]),
         "uninstall" => integration_uninstall(&args[1..]),
         "status" => integration_status(&args[1..]),
@@ -19,6 +22,34 @@ pub(super) fn run_integration_command(args: &[String]) -> std::io::Result<i32> {
             Ok(2)
         }
     }
+}
+
+fn integration_catalog(args: &[String]) -> std::io::Result<i32> {
+    if !args.is_empty() {
+        return Ok(2);
+    }
+    super::print_response(&super::send_request(&crate::api::schema::Request {
+        id: "cli:integration:list".into(),
+        method: crate::api::schema::Method::IntegrationHarnessList(
+            crate::api::schema::EmptyParams::default(),
+        ),
+    })?)
+}
+
+fn integration_activation(args: &[String], active: bool) -> std::io::Result<i32> {
+    let [target] = args else {
+        eprintln!("usage: herdr integration activate|deactivate <TARGET>");
+        return Ok(2);
+    };
+    super::print_response(&super::send_request(&crate::api::schema::Request {
+        id: "cli:integration:activation".into(),
+        method: crate::api::schema::Method::IntegrationHarnessSet(
+            crate::api::schema::IntegrationHarnessSetParams {
+                target: target.clone(),
+                active,
+            },
+        ),
+    })?)
 }
 
 fn integration_status(args: &[String]) -> std::io::Result<i32> {
@@ -193,6 +224,9 @@ fn parse_integration_target(
 
 fn print_integration_help() {
     eprintln!("herdr integration commands:");
+    eprintln!("  herdr integration list");
+    eprintln!("  herdr integration activate <TARGET>");
+    eprintln!("  herdr integration deactivate <TARGET>");
     eprintln!("  herdr integration install pi");
     eprintln!("  herdr integration install omp");
     eprintln!("  herdr integration install claude");

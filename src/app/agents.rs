@@ -51,7 +51,15 @@ fn profile_md_args(kind: &str, mds: &[AgentMd]) -> Result<Vec<String>, AgentSpaw
     if mds.is_empty() {
         return Ok(Vec::new());
     }
-    if kind == "codex" {
+    let Some(harness) = crate::harness::find(kind) else {
+        return Err(AgentSpawnError::ProfileMdUnsupported(kind.to_string()));
+    };
+    if harness.instructions == crate::harness::Instructions::Native {
+        // These integrations use their own context discovery. The profile
+        // cabinet stays intact; the client explicitly labels this distinction.
+        return Ok(Vec::new());
+    }
+    if harness.instructions == crate::harness::Instructions::Codex {
         if mds.len() == 1 {
             let path = mds[0].path.display().to_string();
             let escaped = path.replace('\\', "\\\\").replace('"', "\\\"");
@@ -78,27 +86,36 @@ fn profile_md_args(kind: &str, mds: &[AgentMd]) -> Result<Vec<String>, AgentSpaw
         ]);
     }
 
-    if !matches!(kind, "claude" | "pi") {
-        return Err(AgentSpawnError::ProfileMdUnsupported(kind.to_string()));
-    }
-
     let mut args = Vec::with_capacity(mds.len() * 2);
     for md in mds {
         if !md.path.is_file() {
             return Err(AgentSpawnError::ProfileMdPathNotFile(md.path.clone()));
         }
-        match kind {
-            "claude" => {
-                args.push("--append-system-prompt-file".to_string());
+        match harness.instructions {
+            crate::harness::Instructions::AppendFiles(flag) => {
+                args.push(flag.to_string());
                 args.push(md.path.display().to_string());
             }
-            "pi" => {
-                args.push("--append-system-prompt".to_string());
-                args.push(md.path.display().to_string());
+            crate::harness::Instructions::AppendText(flag) => {
+                let text = mds
+                    .iter()
+                    .map(|md| {
+                        std::fs::read_to_string(&md.path)
+                            .map_err(|_| AgentSpawnError::ProfileMdPathNotFile(md.path.clone()))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?
+                    .join("\n\n");
+                return Ok(vec![flag.into(), text]);
             }
-            _ => {
-                return Err(AgentSpawnError::ProfileMdUnsupported(kind.to_string()));
+            crate::harness::Instructions::Prompt => {
+                let prompt = mds
+                    .iter()
+                    .map(|md| format!("Read and follow the instructions in {}.", md.path.display()))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                return Ok(vec!["--prompt".into(), prompt]);
             }
+            _ => return Err(AgentSpawnError::ProfileMdUnsupported(kind.to_string())),
         }
     }
     Ok(args)
@@ -129,9 +146,11 @@ fn profile_launch_settings(
     kind: &str,
     profile: &crate::agent_registry::AgentProfile,
 ) -> Result<ProfileLaunchSettings, AgentSpawnError> {
+    let capabilities = crate::agent_registry::native_harness_capabilities(kind);
+    let controls = crate::harness::find(kind).map(|h| h.controls);
     let mut args = Vec::new();
     if let Some(model) = &profile.model {
-        if !matches!(kind, "claude" | "codex" | "pi") {
+        if !capabilities.model {
             return Err(AgentSpawnError::ProfileSettingUnsupported(
                 "model".into(),
                 kind.into(),
@@ -145,13 +164,18 @@ fn profile_launch_settings(
             EffortLevel::Medium => "medium",
             EffortLevel::High => "high",
         };
-        match kind {
-            "claude" => args.extend(["--effort".to_string(), level.to_string()]),
-            "codex" => args.extend([
+        match controls
+            .map(|c| c.effort)
+            .unwrap_or(crate::harness::Effort::None)
+        {
+            crate::harness::Effort::Flag => {
+                args.extend(["--effort".to_string(), level.to_string()])
+            }
+            crate::harness::Effort::CodexConfig => args.extend([
                 "-c".to_string(),
                 format!("model_reasoning_effort=\"{level}\""),
             ]),
-            "pi" => {
+            crate::harness::Effort::ModelSuffix => {
                 let Some(model) = profile.model.as_ref() else {
                     return Err(AgentSpawnError::ProfileSettingUnsupported(
                         "effort requires a model".into(),
@@ -171,13 +195,15 @@ fn profile_launch_settings(
     }
     if let Some(allowlist) = &profile.allowlist {
         let tools = profile_allowlist_tools(allowlist).ok_or(AgentSpawnError::InvalidAllowlist)?;
-        match kind {
-            "claude" => {
+        match controls.and_then(|c| c.tools) {
+            Some(crate::harness::Tools::RepeatedFlag) => {
                 for tool in tools {
                     args.extend(["--allowedTools".to_string(), tool]);
                 }
             }
-            "pi" => args.extend(["--tools".to_string(), tools.join(",")]),
+            Some(crate::harness::Tools::CommaSeparated) => {
+                args.extend(["--tools".to_string(), tools.join(",")])
+            }
             _ => {
                 return Err(AgentSpawnError::ProfileSettingUnsupported(
                     "allowlist".into(),
@@ -196,16 +222,9 @@ fn profile_launch_settings(
             if !valid_env_name(source) || std::env::var_os(source).is_none() {
                 return Err(AgentSpawnError::InvalidApiKeyRef);
             }
-            let target = match kind {
-                "claude" => "ANTHROPIC_API_KEY",
-                "codex" => "OPENAI_API_KEY",
-                _ => {
-                    return Err(AgentSpawnError::ProfileSettingUnsupported(
-                        "apikey_ref".into(),
-                        kind.into(),
-                    ))
-                }
-            };
+            let target = controls.and_then(|c| c.key_env).ok_or_else(|| {
+                AgentSpawnError::ProfileSettingUnsupported("apikey_ref".into(), kind.into())
+            })?;
             Ok((target.to_string(), source.to_string()))
         })
         .transpose()?;
@@ -289,7 +308,7 @@ fn validate_profile_native_settings(
 ) -> Result<(), AgentProfileError> {
     let harness = harness
         .or_else(|| registry.get(role).map(|profile| profile.harness.as_str()))
-        .unwrap_or("codex");
+        .unwrap_or(crate::harness::Harness::default_harness());
     let capabilities = crate::agent_registry::native_harness_capabilities(harness);
     for (setting, requested, supported) in [
         ("apikey_ref", setting_api_key, capabilities.api_key_ref),
@@ -588,6 +607,14 @@ impl App {
         let Some(kind) = crate::detect::parse_agent_label(&params.kind) else {
             return Err(AgentStartError::UnsupportedKind(params.kind.clone()));
         };
+        if self
+            .agent_registry
+            .harness_activations
+            .get(crate::detect::agent_label(kind))
+            == Some(&false)
+        {
+            return Err(AgentStartError::InactiveIntegration(params.kind.clone()));
+        }
         validate_agent_start_inputs(&name, &params.args)?;
         if cwd.is_some_and(|cwd| cwd.to_str().is_none()) {
             return Err(AgentStartError::CwdNotUtf8);
@@ -627,6 +654,12 @@ impl App {
             .ok_or_else(|| AgentStartError::TargetBusy(params.pane_id.clone()))?;
 
         let mut argv = vec![crate::detect::interactive_agent_executable(kind).to_string()];
+        argv.extend(
+            kind.harness()
+                .launch_args
+                .iter()
+                .map(|arg| (*arg).to_string()),
+        );
         argv.extend(params.args.clone());
         let command = match (cwd, env_binding.as_ref()) {
             (Some(cwd), Some((target, source))) => {
@@ -816,17 +849,26 @@ impl App {
             preflight_profile
                 .as_ref()
                 .map(|profile| profile.harness.as_str())
-                .unwrap_or("codex")
+                .unwrap_or(crate::harness::Harness::default_harness())
         });
         let Some(preflight_kind) = crate::detect::parse_agent_label(preflight_kind) else {
             return Err(AgentSpawnError::InvalidKind);
         };
+        if self
+            .agent_registry
+            .harness_activations
+            .get(crate::detect::agent_label(preflight_kind))
+            == Some(&false)
+        {
+            return Err(AgentSpawnError::InvalidStartInput(
+                AgentStartError::InactiveIntegration(
+                    crate::detect::agent_label(preflight_kind).into(),
+                ),
+            ));
+        }
         if self.policy.persist_session
             && preflight_profile.is_none()
-            && matches!(
-                crate::detect::agent_label(preflight_kind),
-                "codex" | "pi" | "claude"
-            )
+            && crate::harness::find(crate::detect::agent_label(preflight_kind)).is_some()
         {
             let harness = crate::detect::agent_label(preflight_kind).to_string();
             self.create_profile(AgentProfileCreateParams {
@@ -1506,7 +1548,7 @@ impl App {
         }
         let harness = crate::detect::parse_agent_label(&params.harness)
             .map(|agent| crate::detect::agent_label(agent).to_string())
-            .filter(|harness| matches!(harness.as_str(), "codex" | "pi" | "claude"))
+            .filter(|harness| crate::harness::find(harness).is_some())
             .ok_or_else(|| AgentProfileError::InvalidHarness(params.harness.clone()))?;
         let cwd = std::path::PathBuf::from(&params.native_cwd);
         if !cwd.exists() {
@@ -1522,6 +1564,12 @@ impl App {
         }
         self.refresh_agent_registry_for_read()
             .map_err(|err| AgentProfileError::LoadFailed(err.to_string()))?;
+        if self.agent_registry.harness_activations.get(&harness) == Some(&false) {
+            return Err(AgentProfileError::SettingUnsupported(
+                "inactive integration".into(),
+                harness,
+            ));
+        }
         if self.agent_registry.get(&params.role).is_some() {
             return Err(AgentProfileError::AlreadyExists(params.role));
         }
@@ -1640,6 +1688,33 @@ impl App {
                 params.apikey_ref.is_some(),
                 params.allowlist.is_some(),
             )?;
+            let selected_harness = harness
+                .as_deref()
+                .or_else(|| registry.get(&params.role).map(|p| p.harness.as_str()))
+                .unwrap_or(crate::harness::Harness::default_harness());
+            if registry.harness_activations.get(selected_harness) == Some(&false)
+                && harness.is_some()
+                && registry
+                    .get(&params.role)
+                    .is_none_or(|profile| profile.harness != selected_harness)
+            {
+                return Err(AgentProfileError::SettingUnsupported(
+                    "inactive integration".into(),
+                    selected_harness.into(),
+                ));
+            }
+            let capabilities = crate::agent_registry::native_harness_capabilities(selected_harness);
+            for (name, requested, supported) in [
+                ("model", params.model.is_some(), capabilities.model),
+                ("effort", params.effort.is_some(), capabilities.effort),
+            ] {
+                if requested && !supported {
+                    return Err(AgentProfileError::SettingUnsupported(
+                        name.into(),
+                        selected_harness.into(),
+                    ));
+                }
+            }
             let profile_is_new = registry.get(&params.role).is_none();
             let profile = registry.register_or_get(params.role, seed_cwd);
             if profile_is_new && native_cwd.is_none() {
@@ -1647,6 +1722,12 @@ impl App {
             }
             if let Some(harness) = harness {
                 let capabilities = crate::agent_registry::native_harness_capabilities(&harness);
+                if !capabilities.model {
+                    profile.model = None;
+                }
+                if !capabilities.effort {
+                    profile.effort = None;
+                }
                 if !capabilities.api_key_ref {
                     profile.apikey_ref = None;
                 }
@@ -1845,6 +1926,9 @@ impl App {
     fn agent_start_message(&self, err: AgentStartError) -> String {
         match err {
             AgentStartError::InvalidName => "invalid agent name".to_string(),
+            AgentStartError::InactiveIntegration(kind) => {
+                format!("activate integration {kind} before launching it")
+            }
             AgentStartError::UnsupportedKind(kind) => format!("unsupported agent kind {kind}"),
             AgentStartError::InvalidArgument => "invalid agent argument".to_string(),
             AgentStartError::CwdNotUtf8 => "agent cwd is not valid UTF-8".to_string(),
@@ -1938,6 +2022,10 @@ impl App {
             AgentStartError::InvalidName => crate::api::schema::ErrorBody {
                 code: "invalid_agent_name".into(),
                 message: INVALID_AGENT_NAME_MESSAGE.into(),
+            },
+            AgentStartError::InactiveIntegration(kind) => crate::api::schema::ErrorBody {
+                code: "integration_inactive".into(),
+                message: format!("activate integration {kind} before launching it"),
             },
             AgentStartError::UnsupportedKind(kind) => crate::api::schema::ErrorBody {
                 code: "unsupported_agent_kind".into(),
@@ -2156,6 +2244,7 @@ fn live_runtime_agent(runtime: &crate::terminal::TerminalRuntime) -> Option<crat
 #[derive(Debug)]
 pub(super) enum AgentStartError {
     InvalidName,
+    InactiveIntegration(String),
     UnsupportedKind(String),
     InvalidArgument,
     CwdNotUtf8,

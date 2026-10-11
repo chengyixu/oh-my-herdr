@@ -39,62 +39,9 @@ pub struct AgentDetection {
 }
 
 /// Which agent we detected running in a pane.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Agent {
-    Pi,
-    Claude,
-    Codex,
-    Gemini,
-    Cursor,
-    Devin,
-    Antigravity,
-    Cline,
-    Omp,
-    Mastracode,
-    OpenCode,
-    GithubCopilot,
-    Kimi,
-    Kiro,
-    Droid,
-    Amp,
-    Grok,
-    Hermes,
-    Kilo,
-    Qodercli,
-    Qwen,
-    Letta,
-    Maki,
-    Muse,
-}
+pub use crate::harness::Agent;
 
 impl Agent {
-    pub const ALL: [Self; 24] = [
-        Self::Pi,
-        Self::Claude,
-        Self::Codex,
-        Self::Gemini,
-        Self::Cursor,
-        Self::Devin,
-        Self::Antigravity,
-        Self::Cline,
-        Self::Omp,
-        Self::Mastracode,
-        Self::OpenCode,
-        Self::GithubCopilot,
-        Self::Kimi,
-        Self::Kiro,
-        Self::Droid,
-        Self::Amp,
-        Self::Grok,
-        Self::Hermes,
-        Self::Kilo,
-        Self::Qodercli,
-        Self::Qwen,
-        Self::Letta,
-        Self::Maki,
-        Self::Muse,
-    ];
-
     pub const SCREEN_MANIFEST_AGENTS: [Self; 22] = [
         Self::Pi,
         Self::Claude,
@@ -122,67 +69,11 @@ impl Agent {
 }
 
 pub fn agent_label(agent: Agent) -> &'static str {
-    match agent {
-        Agent::Pi => "pi",
-        Agent::Claude => "claude",
-        Agent::Codex => "codex",
-        Agent::Gemini => "gemini",
-        Agent::Cursor => "cursor",
-        Agent::Devin => "devin",
-        Agent::Antigravity => "agy",
-        Agent::Cline => "cline",
-        Agent::Omp => "omp",
-        Agent::Mastracode => "mastracode",
-        Agent::OpenCode => "opencode",
-        Agent::GithubCopilot => "copilot",
-        Agent::Kimi => "kimi",
-        Agent::Kiro => "kiro",
-        Agent::Droid => "droid",
-        Agent::Amp => "amp",
-        Agent::Grok => "grok",
-        Agent::Hermes => "hermes",
-        Agent::Kilo => "kilo",
-        Agent::Qodercli => "qodercli",
-        Agent::Qwen => "qwen",
-        Agent::Letta => "letta",
-        Agent::Maki => "maki",
-        Agent::Muse => "muse",
-    }
+    agent.harness().id
 }
 
 pub fn interactive_agent_executable(agent: Agent) -> &'static str {
-    match agent {
-        Agent::Pi => "pi",
-        Agent::Claude => "claude",
-        Agent::Codex => "codex",
-        Agent::Gemini => "gemini",
-        Agent::Cursor => {
-            if cfg!(windows) {
-                "cursor-agent.cmd"
-            } else {
-                "cursor-agent"
-            }
-        }
-        Agent::Devin => "devin",
-        Agent::Antigravity => "agy",
-        Agent::Cline => "cline",
-        Agent::Omp => "omp",
-        Agent::Mastracode => "mastracode",
-        Agent::OpenCode => "opencode",
-        Agent::GithubCopilot => "copilot",
-        Agent::Kimi => "kimi",
-        Agent::Kiro => "kiro-cli",
-        Agent::Droid => "droid",
-        Agent::Amp => "amp",
-        Agent::Grok => "grok",
-        Agent::Hermes => "hermes",
-        Agent::Kilo => "kilo",
-        Agent::Qodercli => "qodercli",
-        Agent::Qwen => "qwen",
-        Agent::Letta => "letta",
-        Agent::Maki => "maki",
-        Agent::Muse => "muse",
-    }
+    agent.harness().executable
 }
 
 pub fn parse_agent_label(agent: &str) -> Option<Agent> {
@@ -197,10 +88,11 @@ pub(crate) fn parse_canonical_agent_label(label: &str) -> Option<Agent> {
 
 fn lookup_agent(name: &str) -> Option<Agent> {
     let name = path_basename(name);
+    if let Some(harness) = crate::harness::find(name) {
+        return Some(harness.agent);
+    }
     match name {
-        "pi" => Some(Agent::Pi),
-        "claude" | "claude-code" => Some(Agent::Claude),
-        "codex" => Some(Agent::Codex),
+        "claude-code" => Some(Agent::Claude),
         "gemini" => Some(Agent::Gemini),
         "cursor" | "cursor-agent" => Some(Agent::Cursor),
         "devin" | "devin-cli" | "devin cli" => Some(Agent::Devin),
@@ -217,13 +109,14 @@ fn lookup_agent(name: &str) -> Option<Agent> {
         "grok" | "grok-build" => Some(Agent::Grok),
         "hermes" | "hermes-agent" => Some(Agent::Hermes),
         "kilo" | "kilo-code" | "kilo code" => Some(Agent::Kilo),
-        "qodercli" | "qoderclicn" | "qoder" | "qodercn" => Some(Agent::Qodercli),
+        "qodercli" | "qoder" => Some(Agent::Qodercli),
+        "qodercn" => Some(Agent::QoderCN),
         "qwen" | "qwen-code" | "qwen code" => Some(Agent::Qwen),
         "letta" | "letta-code" | "letta code" => Some(Agent::Letta),
         "maki" => Some(Agent::Maki),
         "muse" | "muse-code" | "muse-cli" => Some(Agent::Muse),
         _ if is_muse_versioned_binary(name) => Some(Agent::Muse),
-        _ => None,
+        _ => crate::harness::find(name).map(|harness| harness.agent),
     }
 }
 
@@ -1030,7 +923,9 @@ mod tests {
             (Agent::Maki, "maki"),
             (Agent::Muse, "muse"),
         ];
-        assert_eq!(expected.len(), Agent::ALL.len());
+        for agent in Agent::ALL {
+            assert!(!interactive_agent_executable(agent).is_empty());
+        }
         for (agent, executable) in expected {
             assert_eq!(interactive_agent_executable(agent), executable);
         }

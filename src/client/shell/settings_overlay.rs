@@ -204,7 +204,7 @@ pub(super) fn render_settings_overlay(
             );
         }
         ClientSettingsSection::Integrations => {
-            render_integrations(buffer, content, settings, palette);
+            render_integrations(buffer, content, settings, palette, &mut choice_hits);
         }
     }
 
@@ -218,10 +218,11 @@ pub(super) fn render_settings_overlay(
             Style::default().fg(palette.red),
         );
     }
-    let installable = settings
-        .integrations
-        .iter()
-        .any(super::super::settings::integration_needs_install);
+    let installable = !settings.harness_integrations.is_empty()
+        || settings
+            .integrations
+            .iter()
+            .any(super::super::settings::integration_needs_install);
     let show_primary = settings.section != ClientSettingsSection::Integrations || installable;
     let labels = if show_primary { vec![10, 12] } else { vec![12] };
     let buttons = row(inner, &labels, 2, inner.height.saturating_sub(1));
@@ -231,7 +232,11 @@ pub(super) fn render_settings_overlay(
             buffer,
             primary,
             if settings.section == ClientSettingsSection::Integrations {
-                " ↵ install "
+                if settings.harness_integrations.is_empty() {
+                    " ↵ install "
+                } else {
+                    " ↵ toggle "
+                }
             } else {
                 " ↵ apply "
             },
@@ -323,7 +328,88 @@ fn render_integrations(
     area: Rect,
     settings: &ClientSettingsOverlay,
     palette: &Palette,
+    choices: &mut Vec<(Rect, usize)>,
 ) {
+    if !settings.harness_integrations.is_empty() {
+        put_text(
+            buffer,
+            area.x,
+            area.y,
+            area.width,
+            "terminal integrations",
+            Style::default().fg(palette.text),
+        );
+        put_text(
+            buffer,
+            area.x,
+            area.y + 1,
+            area.width,
+            "↵ activate/deactivate · i install hooks · next launch/revival",
+            Style::default().fg(palette.overlay1),
+        );
+        let available_rows = area.height.saturating_sub(6) as usize;
+        let first = settings
+            .selected
+            .saturating_sub(available_rows.saturating_sub(1));
+        for (visible, (index, integration)) in settings
+            .harness_integrations
+            .iter()
+            .enumerate()
+            .skip(first)
+            .take(available_rows)
+            .enumerate()
+        {
+            let rect = Rect::new(area.x, area.y + 3 + visible as u16, area.width, 1);
+            let style = Style::default()
+                .fg(palette.text)
+                .bg(if index == settings.selected {
+                    palette.surface0
+                } else {
+                    palette.panel_bg
+                });
+            buffer.set_style(rect, style);
+            let status = if !integration.available {
+                "CLI missing"
+            } else if integration.active {
+                "active"
+            } else {
+                "inactive"
+            };
+            let context = if integration.profile_instructions {
+                "profile instructions"
+            } else {
+                "native context"
+            };
+            put_text(
+                buffer,
+                rect.x,
+                rect.y,
+                rect.width,
+                &format!(
+                    " {} {:<19} · {status} · {context}",
+                    if integration.active { "✓" } else { "○" },
+                    integration.label
+                ),
+                style,
+            );
+            choices.push((rect, index));
+        }
+        for (offset, message) in settings.integration_messages.iter().take(2).enumerate() {
+            let y = area
+                .bottom()
+                .saturating_sub(2)
+                .saturating_add(offset as u16);
+            put_text(
+                buffer,
+                area.x,
+                y,
+                area.width,
+                message,
+                Style::default().fg(palette.overlay1),
+            );
+        }
+        return;
+    }
     put_text(
         buffer,
         area.x,

@@ -25,6 +25,7 @@ mod config;
 mod copy_mode;
 mod detect;
 mod events;
+mod harness;
 use ghostty_vt as ghostty;
 mod handoff_runtime;
 mod input;

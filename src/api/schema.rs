@@ -247,6 +247,10 @@ pub enum Method {
     EventsWait(EventsWaitParams),
     #[serde(rename = "pane.wait_for_output")]
     PaneWaitForOutput(PaneWaitForOutputParams),
+    #[serde(rename = "integration.harness.list")]
+    IntegrationHarnessList(EmptyParams),
+    #[serde(rename = "integration.harness.set")]
+    IntegrationHarnessSet(IntegrationHarnessSetParams),
     #[serde(rename = "integration.list")]
     IntegrationList(EmptyParams),
     #[serde(rename = "integration.install")]

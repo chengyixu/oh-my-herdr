@@ -1260,6 +1260,12 @@ impl App {
                 };
             }
             Method::PaneSendKeys(params) => return self.handle_pane_send_keys(request.id, params),
+            Method::IntegrationHarnessList(_) => {
+                return self.handle_integration_harness_list(request.id);
+            }
+            Method::IntegrationHarnessSet(params) => {
+                return self.handle_integration_harness_set(request.id, params);
+            }
             Method::IntegrationList(_) => {
                 return self.handle_integration_list(request.id);
             }

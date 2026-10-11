@@ -425,6 +425,7 @@ pub(super) struct ClientSettingsOverlay {
     pub(super) original_theme_name: String,
     pub(super) original_palette: Palette,
     pub(super) integrations: Vec<crate::api::schema::IntegrationInfo>,
+    pub(super) harness_integrations: Vec<crate::api::schema::HarnessIntegrationInfo>,
     pub(super) integration_messages: Vec<String>,
     pub(super) loading_integrations: bool,
     pub(super) installing_integrations: bool,
@@ -534,16 +535,24 @@ pub(super) enum ClientContextMenuAction {
     ToggleRightClickPassthrough,
     ClosePane,
     NativeHarness,
+    SpawnProfileSpace,
+    SpawnProfileNative,
+    EditProfile,
+    DeleteProfile,
     ProfileDefault,
-    CodexHarness,
-    PiHarness,
-    ClaudeHarness,
+    SetHarness(usize),
 }
 
 #[derive(Debug)]
 pub(super) enum ClientContextMenuTarget {
+    AgentProfile {
+        role: String,
+        tab_id: String,
+        endpoint_id: ClientEndpointId,
+    },
     AgentHarness {
         instance_id: String,
+        harnesses: Vec<String>,
     },
     Workspace {
         workspace_id: String,
@@ -574,7 +583,7 @@ pub(super) struct ClientContextMenuOverlay {
 }
 
 pub(super) struct ClientContextMenuItem {
-    pub(super) label: &'static str,
+    pub(super) label: String,
     pub(super) action: ClientContextMenuAction,
 }
 
@@ -641,8 +650,11 @@ pub(super) enum PendingEndpointKind {
     ReloadConfig,
     NativeProfiles,
     NativeProfileLoad,
+    NativeProfileHarness,
     NativeProfileSave,
     NativeHarnessPrepare,
+    HarnessIntegrationList,
+    HarnessIntegrationSet,
     IntegrationList,
     IntegrationInstall,
     PrepareWorktreeCreate {
@@ -864,6 +876,7 @@ pub(super) struct ClientCopyModeState {
 }
 
 pub(crate) struct ClientShellState {
+    pub(super) harness_integrations: Vec<crate::api::schema::HarnessIntegrationInfo>,
     pub(super) native_profiles: Vec<crate::api::schema::AgentProfileInfo>,
     pub(super) native_profile_endpoint: Option<ClientEndpointId>,
     pub(super) machine_diagnostics: super::machine_diagnostics::MachineDiagnostics,
@@ -1030,6 +1043,7 @@ impl ClientShellState {
                 .extend(saved.collapsed_groups);
         }
         Self {
+            harness_integrations: Vec::new(),
             native_profiles: Vec::new(),
             native_profile_endpoint: None,
             machine_diagnostics: Default::default(),
@@ -1236,6 +1250,7 @@ impl ClientShellState {
     }
 
     pub(super) fn reset_endpoint_projection(&mut self) {
+        self.harness_integrations.clear();
         self.native_profiles.clear();
         self.native_profile_endpoint = None;
         self.hits = ShellHitMap::default();

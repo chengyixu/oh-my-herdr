@@ -31,7 +31,7 @@ use tracing::warn;
 
 /// Format version — bumped for structurally incompatible changes. Newer files
 /// are preserved without loading so an older binary cannot overwrite them.
-pub const REGISTRY_VERSION: u32 = 3;
+pub const REGISTRY_VERSION: u32 = 4;
 const REGISTRY_FILENAME: &str = "agents.json";
 const REGISTRY_LOCK_FILENAME: &str = ".agents.lock";
 const PROFILE_CONTEXT_DIRECTORY: &str = "agent-context";
@@ -75,16 +75,27 @@ pub enum EffortLevel {
 }
 
 /// Native CLI capabilities shared by launch validation and profile controls.
-#[derive(Debug, Clone, Copy)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(default)]
 pub struct NativeHarnessCapabilities {
     pub api_key_ref: bool,
     pub tool_allowlist: bool,
+    pub auto_approved_tools: bool,
+    pub model: bool,
+    pub effort: bool,
 }
 
 pub fn native_harness_capabilities(harness: &str) -> NativeHarnessCapabilities {
+    let controls = crate::harness::find(harness).map(|h| h.controls);
     NativeHarnessCapabilities {
-        api_key_ref: matches!(harness, "claude" | "codex"),
-        tool_allowlist: matches!(harness, "claude" | "pi"),
+        api_key_ref: controls.is_some_and(|c| c.key_env.is_some()),
+        tool_allowlist: controls.is_some_and(|c| c.tools.is_some()),
+        auto_approved_tools: controls
+            .is_some_and(|c| c.tools == Some(crate::harness::Tools::RepeatedFlag)),
+        model: controls.is_some_and(|c| c.model),
+        effort: controls.is_some_and(|c| c.effort != crate::harness::Effort::None),
     }
 }
 
@@ -143,7 +154,7 @@ impl AgentProfile {
             native_cwd,
             native_cwd_seeded: true,
             mds: Vec::new(),
-            harness: "codex".to_string(),
+            harness: crate::harness::Harness::default_harness().to_string(),
             model: None,
             effort: None,
             apikey_ref: None,
@@ -257,6 +268,10 @@ pub struct AgentRegistry {
     /// Roster, keyed by `AgentRosterEntry::instance_id`.
     #[serde(default)]
     pub roster: BTreeMap<String, AgentRosterEntry>,
+    /// Explicit integration activation. Missing values inherit already-installed
+    /// hooks or saved profiles when migrating an older registry.
+    #[serde(default)]
+    pub harness_activations: BTreeMap<String, bool>,
     /// Monotonic per-registry roster instance counter.
     #[serde(default)]
     next_roster_instance: u64,
@@ -1273,6 +1288,14 @@ fn normalize_roster_entries(registry: &mut AgentRegistry) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn integration_activation_survives_registry_round_trip() {
+        let registry =
+            super::parse(r#"{"version":3,"harness_activations":{"opencode":true,"pi":false}}"#);
+        let encoded = serde_json::to_value(registry).unwrap();
+        assert_eq!(encoded["harness_activations"]["opencode"], true);
+        assert_eq!(encoded["harness_activations"]["pi"], false);
+    }
     use super::*;
 
     fn profile(role: &str) -> AgentProfile {

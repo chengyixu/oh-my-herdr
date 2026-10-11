@@ -300,7 +300,7 @@ pub struct AgentProfileSetMdParams {
 pub struct AgentProfileCreateParams {
     #[schemars(regex(pattern = "^[a-z][a-z0-9_-]{0,31}$"))]
     pub role: String,
-    /// Native harness to use for this profile (`codex`, `pi`, or `claude`).
+    /// Native harness provided by an activated terminal integration.
     pub harness: String,
     /// The profile's own working directory. It is distinct from a target tab's
     /// cwd at spawn time.

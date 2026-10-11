@@ -1805,6 +1805,19 @@ impl ClientShellState {
                 if !self.config.mouse_capture {
                     return;
                 }
+                if super::contains(self.hits.agent_scrollbar, point) {
+                    return;
+                }
+                if let Some((_, role)) = self
+                    .hits
+                    .saved_profiles
+                    .iter()
+                    .find(|(rect, _)| super::contains(*rect, point))
+                    .cloned()
+                {
+                    self.open_native_profile_menu(role, mouse.column, mouse.row, outcome);
+                    return;
+                }
                 let workspace_id = (!self.sidebar_collapsed)
                     .then(|| self.active_endpoint_workspace_at(point))
                     .flatten();
@@ -2016,7 +2029,7 @@ impl ClientShellState {
                     .find(|(rect, _)| super::contains(*rect, point))
                     .cloned()
                 {
-                    self.load_native_profile(role, outcome);
+                    self.open_native_profile_menu(role, mouse.column, mouse.row, outcome);
                     outcome.repaint = true;
                     return;
                 }

@@ -7,6 +7,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 
 impl ClientShellState {
     pub(super) fn queue_native_profiles(&mut self, outcome: &mut ClientShellInput) {
+        self.queue_harness_integrations(outcome);
         self.push_endpoint_method_with_kind(
             Method::AgentProfileList(EmptyParams::default()),
             PendingEndpointKind::NativeProfiles,
@@ -17,7 +18,82 @@ impl ClientShellState {
         self.open_settings_overlay();
         self.select_settings_section(ClientSettingsSection::Agents, outcome);
     }
+    pub(super) fn open_native_profile_menu(
+        &mut self,
+        role: String,
+        x: u16,
+        y: u16,
+        outcome: &mut ClientShellInput,
+    ) {
+        if self.native_profile_endpoint.as_ref() != Some(&self.active_endpoint_id) {
+            self.set_endpoint_error("Reload saved agents for the current connection");
+            outcome.repaint = true;
+            return;
+        }
+        let Some(tab_id) = self
+            .snapshot
+            .as_deref()
+            .and_then(|snapshot| snapshot.focused_tab_id.clone())
+        else {
+            self.set_endpoint_error("Select a space before launching a saved agent");
+            outcome.repaint = true;
+            return;
+        };
+        self.overlay = Some(ClientShellOverlay::ContextMenu(ClientContextMenuOverlay {
+            target: ClientContextMenuTarget::AgentProfile {
+                role,
+                tab_id,
+                endpoint_id: self.active_endpoint_id.clone(),
+            },
+            x,
+            y,
+            highlighted: 0,
+        }));
+        outcome.repaint = true;
+    }
+
+    pub(super) fn spawn_native_profile(
+        &mut self,
+        role: String,
+        tab_id: Option<String>,
+        cwd_mode: &str,
+        outcome: &mut ClientShellInput,
+    ) {
+        if self.push_endpoint_method_with_kind(
+            Method::AgentSpawn(AgentSpawnParams {
+                role,
+                kind: None,
+                tab_id,
+                cwd_mode: cwd_mode.into(),
+                timeout_ms: None,
+                args: Vec::new(),
+            }),
+            PendingEndpointKind::Generic,
+            outcome,
+        ) {
+            self.overlay = None;
+        }
+    }
+
+    pub(super) fn delete_native_profile(&mut self, role: String, outcome: &mut ClientShellInput) {
+        self.push_endpoint_method_with_kind(
+            Method::AgentProfileDelete(AgentProfileDeleteParams { role }),
+            PendingEndpointKind::NativeProfileSave,
+            outcome,
+        );
+    }
+
     pub(super) fn load_native_profile(&mut self, role: String, outcome: &mut ClientShellInput) {
+        self.load_native_profile_with_kind(role, PendingEndpointKind::NativeProfileLoad, outcome);
+    }
+
+    pub(super) fn load_native_profile_with_kind(
+        &mut self,
+        role: String,
+        kind: PendingEndpointKind,
+        outcome: &mut ClientShellInput,
+    ) {
+        self.queue_harness_integrations(outcome);
         self.open_settings_overlay();
         if let Some(ClientShellOverlay::Settings(settings)) = self.overlay.as_mut() {
             settings.section = ClientSettingsSection::Agents;
@@ -29,7 +105,7 @@ impl ClientShellState {
                 documents: Default::default(),
                 delete_document: None,
             }),
-            PendingEndpointKind::NativeProfileLoad,
+            kind,
             outcome,
         );
     }
@@ -42,8 +118,10 @@ impl ClientShellState {
             return;
         }
         let selected = settings.selected;
-        if selected >= 3 {
-            if let Some(profile) = settings.profiles.get(selected - 3) {
+        let harness_choices = self.active_harness_choices();
+        let harness_count = harness_choices.len();
+        if selected >= harness_count {
+            if let Some(profile) = settings.profiles.get(selected - harness_count) {
                 self.load_native_profile(profile.role.clone(), outcome);
             }
             return;
@@ -62,7 +140,9 @@ impl ClientShellState {
             settings.profile_form = Some(Box::new(AgentProfileForm {
                 existing_role: None,
                 role: String::new(),
-                harness: ["codex", "pi", "claude"][selected].into(),
+                harness: harness_choices[selected].clone(),
+                harness_choices,
+                harness_settings: self.harness_integrations.clone(),
                 native_cwd: cwd,
                 model: String::new(),
                 effort: String::new(),
@@ -117,18 +197,18 @@ impl ClientShellState {
             "high" => Some(AgentProfileEffort::High),
             _ => None,
         };
-        let caps = crate::agent_registry::native_harness_capabilities(&form.harness);
+        let caps = form.capabilities();
         let patch = AgentProfileSetParams {
             role: form.role.clone(),
             harness: Some(form.harness.clone()),
             native_cwd: Some(form.native_cwd.clone()),
-            model: (!form.model.trim().is_empty()).then(|| form.model.clone()),
-            effort,
+            model: (caps.model && !form.model.trim().is_empty()).then(|| form.model.clone()),
+            effort: if caps.effort { effort } else { None },
             apikey_ref: (caps.api_key_ref && !form.apikey_ref.is_empty())
                 .then(|| form.apikey_ref.clone()),
             allowlist: if caps.tool_allowlist { allowlist } else { None },
-            clear_model: form.model.is_empty(),
-            clear_effort: form.effort.is_empty(),
+            clear_model: !caps.model || form.model.is_empty(),
+            clear_effort: !caps.effort || form.effort.is_empty(),
             clear_apikey_ref: !caps.api_key_ref || form.apikey_ref.is_empty(),
             clear_allowlist: !caps.tool_allowlist || form.allowlist.is_empty(),
         };
@@ -198,30 +278,25 @@ impl ClientShellState {
         }
         let role = settings
             .selected
-            .checked_sub(3)
+            .checked_sub(
+                settings
+                    .harness_integrations
+                    .iter()
+                    .filter(|harness| harness.active && harness.available)
+                    .count(),
+            )
             .and_then(|i| settings.profiles.get(i))
             .map(|p| p.role.clone());
         match key.code {
-            KeyCode::Char('d') if role.is_some() => self.push_endpoint_method_with_kind(
-                Method::AgentProfileDelete(AgentProfileDeleteParams {
-                    role: role.unwrap_or_default(),
-                }),
-                PendingEndpointKind::NativeProfileSave,
-                outcome,
-            ),
-            KeyCode::Char('s') if role.is_some() => self.push_endpoint_method_with_kind(
-                Method::AgentSpawn(AgentSpawnParams {
-                    role: role.unwrap_or_default(),
-                    kind: None,
-                    tab_id: self
-                        .snapshot
-                        .as_deref()
-                        .and_then(|s| s.focused_tab_id.clone()),
-                    cwd_mode: "tab".into(),
-                    timeout_ms: None,
-                    args: Vec::new(),
-                }),
-                PendingEndpointKind::Generic,
+            KeyCode::Char('d') if role.is_some() => {
+                self.delete_native_profile(role.unwrap_or_default(), outcome)
+            }
+            KeyCode::Char('s') if role.is_some() => self.spawn_native_profile(
+                role.unwrap_or_default(),
+                self.snapshot
+                    .as_deref()
+                    .and_then(|snapshot| snapshot.focused_tab_id.clone()),
+                "tab",
                 outcome,
             ),
             _ => return false,
@@ -234,6 +309,7 @@ impl ClientShellState {
         pane_id: String,
         outcome: &mut ClientShellInput,
     ) {
+        self.queue_harness_integrations(outcome);
         self.push_endpoint_method_with_kind(
             Method::AgentHarnessPrepare(AgentTarget { target: pane_id }),
             PendingEndpointKind::NativeHarnessPrepare,
@@ -295,12 +371,15 @@ impl ClientShellState {
                         scroll: 0,
                     })
                     .collect();
+                let harness_choices = self.active_harness_choices();
                 if let Some(ClientShellOverlay::Settings(settings)) = self.overlay.as_mut() {
                     settings.profile_error = None;
                     settings.profile_form = Some(Box::new(AgentProfileForm {
                         existing_role: Some(profile.role.clone()),
                         role: profile.role,
                         harness: profile.harness,
+                        harness_choices,
+                        harness_settings: self.harness_integrations.clone(),
                         native_cwd: profile.native_cwd,
                         model: profile.model.unwrap_or_default(),
                         effort: profile
@@ -321,7 +400,12 @@ impl ClientShellState {
                         instructions,
                         selected_markdown: None,
                         pending_markdown_name: None,
-                        selected_field: 7,
+                        selected_field: if matches!(kind, PendingEndpointKind::NativeProfileHarness)
+                        {
+                            0
+                        } else {
+                            7
+                        },
                     }));
                     if matches!(kind, PendingEndpointKind::NativeProfileLoad) {
                         if let Some(mut draft) = retained_draft {
@@ -352,16 +436,19 @@ impl ClientShellState {
                 instance_id,
                 harness_override,
             } => {
+                let harnesses = self.active_harness_choices();
+                let highlighted = harness_override
+                    .as_deref()
+                    .and_then(|id| harnesses.iter().position(|h| h == id))
+                    .map_or(0, |index| index + 1);
                 self.overlay = Some(ClientShellOverlay::ContextMenu(ClientContextMenuOverlay {
-                    target: ClientContextMenuTarget::AgentHarness { instance_id },
+                    target: ClientContextMenuTarget::AgentHarness {
+                        instance_id,
+                        harnesses,
+                    },
                     x: self.hits.panes.first().map(|p| p.rect.x).unwrap_or(0),
                     y: self.hits.panes.first().map(|p| p.rect.y).unwrap_or(0),
-                    highlighted: match harness_override.as_deref() {
-                        Some("codex") => 1,
-                        Some("pi") => 2,
-                        Some("claude") => 3,
-                        _ => 0,
-                    },
+                    highlighted,
                 }));
             }
             _ => self.set_endpoint_error("Unexpected native agent response"),
@@ -389,9 +476,13 @@ pub(super) fn render_profiles(
             fields.extend([
                 (0, format!("native harness: {} (←→)", form.harness)),
                 (1, format!("native cwd: {}", form.native_cwd)),
-                (2, format!("model: {}", form.model)),
-                (3, format!("effort: {} (←→)", form.effort)),
             ]);
+            if form.field_enabled(2) {
+                fields.push((2, format!("model: {}", form.model)));
+            }
+            if form.field_enabled(3) {
+                fields.push((3, format!("effort: {} (←→)", form.effort)));
+            }
             if form.field_enabled(4) {
                 fields.push((4, format!("API key ref (env:NAME): {}", form.apikey_ref)));
             }
@@ -400,7 +491,7 @@ pub(super) fn render_profiles(
                     5,
                     format!(
                         "{}: {}",
-                        if form.harness == "claude" {
+                        if form.capabilities().auto_approved_tools {
                             "auto-approved tools"
                         } else {
                             "built-in tools"
@@ -435,6 +526,17 @@ pub(super) fn render_profiles(
             hits.push((rect, field));
             y += 1;
         }
+        if !form.profile_instructions_supported() && y < area.bottom() {
+            put_text(
+                buffer,
+                area.x,
+                y,
+                area.width,
+                "Uses native instructions; profile documents stay saved.",
+                style.fg(palette.overlay1),
+            );
+            y += 1;
+        }
         if y < area.bottom() {
             put_text(
                 buffer,
@@ -450,9 +552,26 @@ pub(super) fn render_profiles(
         super::native_profiles::render_document(buffer, document, form, style);
         hits.push((document, form.instructions_field()));
     } else {
-        for (index, label) in ["New Codex profile", "New Pi profile", "New Claude profile"]
-            .into_iter()
-            .map(String::from)
+        if settings
+            .harness_integrations
+            .iter()
+            .all(|h| !h.active || !h.available)
+            && settings.profiles.is_empty()
+        {
+            put_text(
+                buffer,
+                area.x,
+                area.y,
+                area.width,
+                "Activate a terminal integration in Integrations to create a profile.",
+                style.fg(palette.overlay1),
+            );
+        }
+        for (index, label) in settings
+            .harness_integrations
+            .iter()
+            .filter(|h| h.active && h.available)
+            .map(|h| format!("New {} profile", h.label))
             .chain(
                 settings
                     .profiles

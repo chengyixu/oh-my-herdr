@@ -4,7 +4,7 @@ use super::agents::{AgentInfo, AgentProfileInfo, AgentRosterEntryInfo, SpawnedAg
 use super::common::{ClientWindowTitleReason, NotificationShowReason};
 use super::events::EventEnvelope;
 use super::integrations::{
-    IntegrationInstallResult, IntegrationTarget, IntegrationUninstallResult,
+    HarnessIntegrationInfo, IntegrationInstallResult, IntegrationTarget, IntegrationUninstallResult,
 };
 use super::panes::{
     LayoutDescription, PaneEdgesResult, PaneFocusDirectionResult, PaneInfo, PaneLayoutSnapshot,
@@ -109,6 +109,12 @@ pub enum ResponseResult {
     },
     AgentRosterList {
         entries: Vec<AgentRosterEntryInfo>,
+    },
+    HarnessIntegrationList {
+        integrations: Vec<HarnessIntegrationInfo>,
+    },
+    HarnessIntegrationSet {
+        integration: HarnessIntegrationInfo,
     },
     AgentHarnessSet {
         instance_id: String,

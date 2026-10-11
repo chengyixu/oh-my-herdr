@@ -3068,7 +3068,13 @@ fn live_handoff_rejects_deferred_agent_spawn() {
     deferred_spawn.flush().unwrap();
 
     let registry_path = config_home.join("herdr-dev/agents.json");
-    let registry = wait_for_file_contains(&registry_path, "\"reviewer\"", Duration::from_secs(5));
+    // Profile creation is an earlier atomic write. Wait for the durable spawn
+    // reservation rather than accepting the profile-only snapshot.
+    let registry = wait_for_file_contains(
+        &registry_path,
+        "\"display_name\": \"reviewer\"",
+        Duration::from_secs(5),
+    );
     let registry: serde_json::Value = serde_json::from_str(&registry).unwrap();
     assert!(registry["roster"]
         .as_object()

@@ -92,7 +92,7 @@ pub(crate) fn agent_pane_harness_rect(app: &AppState, info: &PaneInfo) -> Option
     agent_pane_header_enabled(app, tab, info.id, inner).then_some(Rect::new(
         inner.x,
         inner.y,
-        10.min(inner.width),
+        inner.width,
         1,
     ))
 }
@@ -489,31 +489,13 @@ pub(super) fn render_panes(
                     })
                 })
                 .unwrap_or("agent");
-            let next = terminal
-                .and_then(|terminal| terminal.live_roster_instance_id())
-                .and_then(|id| app.agent_harness_overrides.get(id))
-                .map(String::as_str);
             frame.render_widget(
-                Paragraph::new("Harness…").style(
+                Paragraph::new(format!("Harness: {label}")).style(
                     Style::default()
                         .fg(app.palette.accent)
                         .bg(app.palette.surface0),
                 ),
-                rect,
-            );
-            let rest = Rect::new(
-                rect.x + rect.width,
-                rect.y,
-                info.inner_rect.width.saturating_sub(rect.width),
-                1,
-            );
-            frame.render_widget(
-                Paragraph::new(format!(
-                    " running: {label} · next: {}",
-                    next.unwrap_or("profile default")
-                ))
-                .style(Style::default().fg(app.palette.overlay1)),
-                rest,
+                Rect::new(rect.x, rect.y, info.inner_rect.width, 1),
             );
         }
     }

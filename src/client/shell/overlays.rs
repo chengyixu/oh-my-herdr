@@ -169,17 +169,19 @@ pub(crate) fn render_context_menu(
 ) -> Option<OverlayRender> {
     let items = menu.items();
     let screen = buffer.area;
+    let harness_menu = matches!(menu.target, ClientContextMenuTarget::AgentHarness { .. });
     let max_item_width = items
         .iter()
-        .map(|item| display_width(item.label))
+        .map(|item| display_width(&item.label))
         .max()
-        .unwrap_or(0);
+        .unwrap_or(0)
+        .max(if harness_menu { 28 } else { 0 });
     let width = max_item_width
         .saturating_add(4)
         .max(14)
         .min(screen.width.max(1));
     let height = (items.len() as u16)
-        .saturating_add(2)
+        .saturating_add(2 + u16::from(harness_menu))
         .min(screen.height.max(1));
     let x = menu
         .x
@@ -190,10 +192,29 @@ pub(crate) fn render_context_menu(
             .saturating_add(screen.height.saturating_sub(height)),
     );
     let rect = Rect::new(x, y, width, height);
-    let inner = panel(buffer, rect, palette.accent, palette.panel_bg)?;
+    let mut inner = panel(buffer, rect, palette.accent, palette.panel_bg)?;
+    if harness_menu {
+        put_text(
+            buffer,
+            inner.x,
+            inner.y,
+            inner.width,
+            "Harness · next launch/revival",
+            Style::default().fg(palette.overlay1).bg(palette.panel_bg),
+        );
+        inner = Rect::new(
+            inner.x,
+            inner.y + 1,
+            inner.width,
+            inner.height.saturating_sub(1),
+        );
+    }
     let mut rows = Vec::new();
-    for (index, item) in items.iter().enumerate() {
-        let row_y = inner.y.saturating_add(index as u16);
+    let first = menu
+        .highlighted
+        .saturating_sub(inner.height.saturating_sub(1) as usize);
+    for (visible, (index, item)) in items.iter().enumerate().skip(first).enumerate() {
+        let row_y = inner.y.saturating_add(visible as u16);
         if row_y >= inner.bottom() {
             break;
         }
@@ -208,7 +229,7 @@ pub(crate) fn render_context_menu(
             Style::default().fg(palette.text).bg(palette.panel_bg)
         };
         buffer.set_style(row, style);
-        put_text(buffer, row.x, row.y, row.width, item.label, style);
+        put_text(buffer, row.x, row.y, row.width, &item.label, style);
         rows.push((row, index));
     }
     Some(OverlayRender {
