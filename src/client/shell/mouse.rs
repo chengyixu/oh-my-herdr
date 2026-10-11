@@ -1490,53 +1490,67 @@ impl ClientShellState {
             return;
         }
         if matches!(self.overlay, Some(ClientShellOverlay::Settings(_))) {
-            if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
-                if let Some((_, section)) = self
-                    .hits
-                    .settings_tabs
-                    .iter()
-                    .find(|(rect, _)| super::contains(*rect, point))
-                    .copied()
+            match mouse.kind {
+                MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                    if super::contains(self.hits.settings_popup, point) =>
                 {
-                    self.select_settings_section(section, outcome);
-                } else if let Some((_, index)) = self
-                    .hits
-                    .settings_choices
-                    .iter()
-                    .find(|(rect, _)| super::contains(*rect, point))
-                    .copied()
-                {
-                    self.select_settings_choice(index);
-                    let immediate = matches!(
-                        self.overlay,
-                        Some(ClientShellOverlay::Settings(ClientSettingsOverlay {
-                            section: ClientSettingsSection::Indicators
-                                | ClientSettingsSection::Sound
-                                | ClientSettingsSection::Toast,
-                            ..
-                        }))
-                    );
-                    if immediate {
-                        self.apply_settings_choice(outcome);
-                    }
+                    let delta = if mouse.kind == MouseEventKind::ScrollUp {
+                        -1
+                    } else {
+                        1
+                    };
+                    self.move_settings_selection(delta);
                     outcome.repaint = true;
-                } else if super::contains(self.hits.overlay_primary, point) {
-                    self.apply_settings_choice(outcome);
-                } else if super::contains(self.hits.overlay_cancel, point)
-                    || !super::contains(self.hits.settings_popup, point)
-                {
-                    let installing = matches!(
-                        self.overlay,
-                        Some(ClientShellOverlay::Settings(ClientSettingsOverlay {
-                            installing_integrations: true,
-                            ..
-                        }))
-                    );
-                    if !installing {
-                        self.cancel_settings_overlay();
+                }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if let Some((_, section)) = self
+                        .hits
+                        .settings_tabs
+                        .iter()
+                        .find(|(rect, _)| super::contains(*rect, point))
+                        .copied()
+                    {
+                        self.select_settings_section(section, outcome);
+                    } else if let Some((_, index)) = self
+                        .hits
+                        .settings_choices
+                        .iter()
+                        .find(|(rect, _)| super::contains(*rect, point))
+                        .copied()
+                    {
+                        self.select_settings_choice(index);
+                        let immediate = matches!(
+                            self.overlay,
+                            Some(ClientShellOverlay::Settings(ClientSettingsOverlay {
+                                section: ClientSettingsSection::Indicators
+                                    | ClientSettingsSection::Sound
+                                    | ClientSettingsSection::Toast,
+                                ..
+                            }))
+                        );
+                        if immediate {
+                            self.apply_settings_choice(outcome);
+                        }
                         outcome.repaint = true;
+                    } else if super::contains(self.hits.overlay_primary, point) {
+                        self.apply_settings_choice(outcome);
+                    } else if super::contains(self.hits.overlay_cancel, point)
+                        || !super::contains(self.hits.settings_popup, point)
+                    {
+                        let installing = matches!(
+                            self.overlay,
+                            Some(ClientShellOverlay::Settings(ClientSettingsOverlay {
+                                installing_integrations: true,
+                                ..
+                            }))
+                        );
+                        if !installing {
+                            self.cancel_settings_overlay();
+                            outcome.repaint = true;
+                        }
                     }
                 }
+                _ => {}
             }
             return;
         }

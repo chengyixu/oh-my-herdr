@@ -23,6 +23,7 @@ mod harness_integrations;
 mod input;
 mod input_source;
 mod link_hover;
+mod live_harness_switch;
 mod mobile;
 mod mouse;
 mod native_agent_actions;

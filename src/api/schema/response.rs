@@ -116,6 +116,14 @@ pub enum ResponseResult {
     HarnessIntegrationSet {
         integration: HarnessIntegrationInfo,
     },
+    AgentHarnessCommitted {
+        previous_tab: String,
+        pane: PaneInfo,
+    },
+    AgentHarnessContext {
+        harness: String,
+        documents: std::collections::BTreeMap<String, String>,
+    },
     AgentHarnessSet {
         instance_id: String,
         harness_override: Option<String>,

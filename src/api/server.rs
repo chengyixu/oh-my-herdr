@@ -437,6 +437,17 @@ fn handle_connection_with_stop(
             )?;
             finish_wait_response(&mut stream, response, &request_id, method, changes_ui)
         }
+        Method::AgentReadyWait(params) => {
+            let response = super::wait::wait_for_agent_ready(
+                request_id.clone(),
+                params,
+                &mut stream,
+                api_tx,
+                event_hub,
+                running,
+            )?;
+            finish_wait_response(&mut stream, response, &request_id, method, changes_ui)
+        }
         Method::AgentWait(params) => {
             let response = wait_for_agent(
                 request_id.clone(),
@@ -612,6 +623,8 @@ pub(crate) fn api_method_name(method: &Method) -> &'static str {
         Method::AgentSpawn(_) => "agent.spawn",
         Method::AgentRevive(_) => "agent.revive",
         Method::AgentRosterList(_) => "agent.roster.list",
+        Method::AgentHarnessCommit(_) => "agent.harness.commit",
+        Method::AgentHarnessContext(_) => "agent.harness.context",
         Method::AgentHarnessPrepare(_) => "agent.harness.prepare",
         Method::AgentHarnessSet(_) => "agent.harness.set",
         Method::AgentProfileCreate(_) => "agent.profile.create",
@@ -623,6 +636,7 @@ pub(crate) fn api_method_name(method: &Method) -> &'static str {
         Method::AgentProfileDelete(_) => "agent.profile.delete",
         Method::AgentBroadcast(_) => "agent.broadcast",
         Method::AgentPrompt(_) => "agent.prompt",
+        Method::AgentReadyWait(_) => "agent.ready.wait",
         Method::AgentWait(_) => "agent.wait",
         Method::PaneSplit(_) => "pane.split",
         Method::PaneSwap(_) => "pane.swap",

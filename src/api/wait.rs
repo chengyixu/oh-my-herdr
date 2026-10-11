@@ -161,6 +161,51 @@ pub(super) fn wait_for_agent(
             last_event_sequence,
             after_state_change_seq: None,
             accept_transient_status: true,
+            ready_only: false,
+            timeout_kind: AgentWaitTimeoutKind::Status,
+        },
+        stream,
+        api_tx,
+        event_hub,
+        running,
+    )? {
+        Some(AgentWaitOutcome::Matched(agent)) => agent_wait_success(request_id, *agent).map(Some),
+        Some(AgentWaitOutcome::Response(response)) => Ok(Some(response)),
+        None => Ok(None),
+    }
+}
+
+pub(super) fn wait_for_agent_ready(
+    request_id: String,
+    params: crate::api::schema::AgentWaitParams,
+    stream: &mut LocalStream,
+    api_tx: &ApiRequestSender,
+    event_hub: &EventHub,
+    running: &Arc<AtomicBool>,
+) -> std::io::Result<Option<String>> {
+    let last_event_sequence = event_hub.current_sequence();
+    let initial = match agent_get(&request_id, &params.target, api_tx) {
+        Ok(agent) => agent,
+        Err(response) => {
+            return serde_json::to_string(&response)
+                .map(Some)
+                .map_err(std::io::Error::other)
+        }
+    };
+    if initial.interactive_ready && !initial.launch_pending {
+        return agent_wait_success(request_id, initial).map(Some);
+    }
+    match wait_for_resolved_agent(
+        request_id.clone(),
+        ResolvedAgentWait {
+            target: params.target,
+            until: Vec::new(),
+            timeout_ms: params.timeout_ms,
+            initial,
+            last_event_sequence,
+            after_state_change_seq: None,
+            accept_transient_status: false,
+            ready_only: true,
             timeout_kind: AgentWaitTimeoutKind::Status,
         },
         stream,
@@ -273,6 +318,7 @@ pub(super) fn prompt_agent(
                 last_event_sequence,
                 after_state_change_seq: Some(prompt_state_change_seq),
                 accept_transient_status: true,
+                ready_only: false,
                 timeout_kind,
             },
             stream,
@@ -304,6 +350,7 @@ pub(super) fn prompt_agent(
             last_event_sequence,
             after_state_change_seq: None,
             accept_transient_status: false,
+            ready_only: false,
             timeout_kind: AgentWaitTimeoutKind::Status,
         },
         stream,
@@ -347,6 +394,7 @@ struct ResolvedAgentWait {
     last_event_sequence: u64,
     after_state_change_seq: Option<u64>,
     accept_transient_status: bool,
+    ready_only: bool,
     timeout_kind: AgentWaitTimeoutKind,
 }
 
@@ -473,12 +521,17 @@ fn wait_for_resolved_agent(
                     .map(AgentWaitOutcome::Response)
                     .map(Some);
             }
-            if let Some(status) = matched_event_status {
-                let mut matched = current;
-                matched.agent_status = status;
-                return Ok(Some(AgentWaitOutcome::Matched(Box::new(matched))));
+            if !wait.ready_only {
+                if let Some(status) = matched_event_status {
+                    let mut matched = current;
+                    matched.agent_status = status;
+                    return Ok(Some(AgentWaitOutcome::Matched(Box::new(matched))));
+                }
             }
-            if agent_wait_matches(&current, &wait.until, wait.after_state_change_seq) {
+            if (wait.ready_only && current.interactive_ready && !current.launch_pending)
+                || (!wait.ready_only
+                    && agent_wait_matches(&current, &wait.until, wait.after_state_change_seq))
+            {
                 return Ok(Some(AgentWaitOutcome::Matched(Box::new(current))));
             }
         }
@@ -502,7 +555,10 @@ fn wait_for_resolved_agent(
                     .map(AgentWaitOutcome::Response)
                     .map(Some);
             }
-            if agent_wait_matches(&current, &wait.until, wait.after_state_change_seq) {
+            if (wait.ready_only && current.interactive_ready && !current.launch_pending)
+                || (!wait.ready_only
+                    && agent_wait_matches(&current, &wait.until, wait.after_state_change_seq))
+            {
                 return Ok(Some(AgentWaitOutcome::Matched(Box::new(current))));
             }
             return agent_wait_timeout(request_id, wait.timeout_kind, &current)

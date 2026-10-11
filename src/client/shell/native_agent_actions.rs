@@ -309,10 +309,17 @@ impl ClientShellState {
         pane_id: String,
         outcome: &mut ClientShellInput,
     ) {
+        if !self.harness_catalog_available() {
+            self.set_endpoint_error("The running server lacks terminal integrations; run ohmyherdr server live-handoff when ready to upgrade it");
+            outcome.repaint = true;
+            return;
+        }
         self.queue_harness_integrations(outcome);
         self.push_endpoint_method_with_kind(
-            Method::AgentHarnessPrepare(AgentTarget { target: pane_id }),
-            PendingEndpointKind::NativeHarnessPrepare,
+            Method::AgentHarnessPrepare(AgentTarget {
+                target: pane_id.clone(),
+            }),
+            PendingEndpointKind::NativeHarnessPrepare { pane_id },
             outcome,
         );
     }
@@ -437,17 +444,36 @@ impl ClientShellState {
                 harness_override,
             } => {
                 let harnesses = self.active_harness_choices();
-                let highlighted = harness_override
-                    .as_deref()
+                let running = match &kind {
+                    PendingEndpointKind::NativeHarnessPrepare { pane_id } => self
+                        .snapshot
+                        .as_deref()
+                        .and_then(|snapshot| {
+                            snapshot
+                                .agents
+                                .iter()
+                                .find(|agent| agent.pane_id == *pane_id)
+                        })
+                        .and_then(|agent| agent.agent.as_deref()),
+                    _ => None,
+                };
+                let highlighted = running
+                    .or(harness_override.as_deref())
                     .and_then(|id| harnesses.iter().position(|h| h == id))
                     .map_or(0, |index| index + 1);
+                let anchor = match &kind {
+                    PendingEndpointKind::NativeHarnessPrepare { pane_id } => {
+                        self.hits.panes.iter().find(|hit| hit.pane_id == *pane_id)
+                    }
+                    _ => None,
+                };
                 self.overlay = Some(ClientShellOverlay::ContextMenu(ClientContextMenuOverlay {
                     target: ClientContextMenuTarget::AgentHarness {
                         instance_id,
                         harnesses,
                     },
-                    x: self.hits.panes.first().map(|p| p.rect.x).unwrap_or(0),
-                    y: self.hits.panes.first().map(|p| p.rect.y).unwrap_or(0),
+                    x: anchor.map(|p| p.rect.x).unwrap_or(0),
+                    y: anchor.map(|p| p.rect.y).unwrap_or(0),
                     highlighted,
                 }));
             }

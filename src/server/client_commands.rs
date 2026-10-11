@@ -13,6 +13,8 @@ pub(crate) const MAX_ENDPOINT_REQUEST_ID_BYTES: usize = 128;
 const ENDPOINT_RESPONSE_CHUNK_BYTES: usize = 512 * 1024;
 
 const CLIENT_SHELL_METHODS: &[&str] = &[
+    "agent.harness.commit",
+    "agent.harness.context",
     "agent.harness.prepare",
     "agent.harness.set",
     "agent.profile.create",
@@ -21,6 +23,7 @@ const CLIENT_SHELL_METHODS: &[&str] = &[
     "agent.profile.get",
     "agent.profile.list",
     "agent.profile.set",
+    "agent.ready.wait",
     "agent.revive",
     "agent.roster.list",
     "agent.spawn",
@@ -333,6 +336,18 @@ mod tests {
                 actual.remove(&method).as_deref(),
                 Some(digest.as_str()),
                 "integration endpoint method {method} changed"
+            );
+        }
+        let handoff: BTreeMap<String, String> = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/endpoint-method-shapes-ohmyherdr-v3.json"
+        )))
+        .expect("portable harness handoff extension contract");
+        for (method, digest) in handoff {
+            assert_eq!(
+                actual.remove(&method).as_deref(),
+                Some(digest.as_str()),
+                "harness handoff method {method} changed"
             );
         }
         assert_eq!(

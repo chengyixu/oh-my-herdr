@@ -530,7 +530,8 @@ impl ClientShellState {
                 | PendingEndpointKind::NativeProfileLoad
                 | PendingEndpointKind::NativeProfileHarness
                 | PendingEndpointKind::NativeProfileSave
-                | PendingEndpointKind::NativeHarnessPrepare
+                | PendingEndpointKind::HarnessSwitch { .. }
+                | PendingEndpointKind::NativeHarnessPrepare { .. }
                 | PendingEndpointKind::Generic
                 | PendingEndpointKind::ProductAnnouncementDismiss { .. }
                 | PendingEndpointKind::ReleaseNotesDismiss

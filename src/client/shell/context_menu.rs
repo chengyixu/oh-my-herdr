@@ -17,7 +17,7 @@ impl ClientContextMenuOverlay {
                 item("Delete profile", Action::DeleteProfile),
             ],
             ClientContextMenuTarget::AgentHarness { harnesses, .. } => {
-                std::iter::once(item("Profile default (on revival)", Action::ProfileDefault))
+                std::iter::once(item("Profile harness (switch now)", Action::ProfileDefault))
                     .chain(
                         harnesses
                             .iter()
@@ -254,15 +254,7 @@ impl ClientShellState {
                     ClientContextMenuAction::SetHarness(index) => harnesses.get(index).cloned(),
                     _ => None,
                 };
-                self.push_endpoint_method(
-                    crate::api::schema::Method::AgentHarnessSet(
-                        crate::api::schema::AgentHarnessSetParams {
-                            instance_id,
-                            harness,
-                        },
-                    ),
-                    outcome,
-                );
+                self.begin_live_harness_switch(instance_id, harness, outcome);
             }
             ClientContextMenuTarget::Workspace { workspace_id, .. } => {
                 self.activate_workspace_context_action(workspace_id, action, outcome)

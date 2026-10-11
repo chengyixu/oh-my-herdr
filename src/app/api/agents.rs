@@ -3,10 +3,11 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 
 use crate::api::schema::{
-    AgentBroadcastParams, AgentProfileCreateParams, AgentProfileDeleteParams,
-    AgentProfileSetMdParams, AgentPromptParams, AgentRenameParams, AgentReviveParams,
-    AgentRosterEntryInfo, AgentRosterStatus, AgentSendKeysParams, AgentSpawnParams,
-    AgentStartParams, AgentTarget, PaneReadResult, ResponseResult,
+    AgentBroadcastParams, AgentHarnessCommitParams, AgentHarnessContextParams,
+    AgentProfileCreateParams, AgentProfileDeleteParams, AgentProfileSetMdParams, AgentPromptParams,
+    AgentRenameParams, AgentReviveParams, AgentRosterEntryInfo, AgentRosterStatus,
+    AgentSendKeysParams, AgentSpawnParams, AgentStartParams, AgentTarget, PaneReadResult,
+    ResponseResult,
 };
 use crate::app::App;
 
@@ -236,6 +237,200 @@ impl App {
             ResponseResult::AgentHarnessSet {
                 instance_id: entry.instance_id,
                 harness_override: entry.harness_override,
+            },
+        )
+    }
+
+    pub(super) fn handle_agent_harness_commit(
+        &mut self,
+        id: String,
+        params: AgentHarnessCommitParams,
+    ) -> String {
+        if params.source_instance_id == params.target_instance_id
+            || params.source_pane_id == params.target_pane_id
+        {
+            return encode_error(
+                id,
+                "agent_switch_stale",
+                "source and replacement must be distinct instances",
+            );
+        }
+        if let Err(err) = self.refresh_agent_registry_for_read() {
+            return encode_error(id, "agent_profile_load_failed", err.to_string());
+        }
+        let Some(source) = self.agent_registry.roster.get(&params.source_instance_id) else {
+            return encode_error(id, "agent_switch_stale", "original agent was not found");
+        };
+        let Some(target) = self.agent_registry.roster.get(&params.target_instance_id) else {
+            return encode_error(id, "agent_switch_stale", "replacement agent was not found");
+        };
+        if source.role != target.role
+            || source.status == crate::agent_registry::AgentStatus::Terminated
+            || target.status == crate::agent_registry::AgentStatus::Terminated
+            || source.last_pane.as_deref() != Some(params.source_pane_id.as_str())
+            || target.last_pane.as_deref() != Some(params.target_pane_id.as_str())
+        {
+            return encode_error(
+                id,
+                "agent_switch_stale",
+                "agent identity or profile changed during handoff",
+            );
+        }
+        let Some((source_ws, source_pane)) = self.parse_pane_id(&params.source_pane_id) else {
+            return encode_error(id, "agent_switch_stale", "original pane disappeared");
+        };
+        let Some((target_ws, target_pane)) = self.parse_pane_id(&params.target_pane_id) else {
+            return encode_error(id, "agent_switch_stale", "replacement pane disappeared");
+        };
+        let source_tab = self.state.workspaces[source_ws].find_tab_index_for_pane(source_pane);
+        let target_tab = self.state.workspaces[target_ws].find_tab_index_for_pane(target_pane);
+        if source_ws != target_ws || source_tab.is_none() || source_tab != target_tab {
+            return encode_error(
+                id,
+                "agent_switch_stale",
+                "agent panes are no longer in the same space and tab",
+            );
+        }
+        let source_terminal = self.state.workspaces[source_ws]
+            .terminal_id(source_pane)
+            .and_then(|id| self.state.terminals.get(id));
+        let target_terminal = self.state.workspaces[target_ws]
+            .terminal_id(target_pane)
+            .and_then(|id| self.state.terminals.get(id));
+        if source_terminal.and_then(|terminal| terminal.live_roster_instance_id())
+            != Some(params.source_instance_id.as_str())
+            || target_terminal.and_then(|terminal| terminal.live_roster_instance_id())
+                != Some(params.target_instance_id.as_str())
+            || target.harness_override.as_deref()
+                != target_terminal.and_then(|terminal| terminal.effective_agent_label())
+            || target_terminal.is_some_and(|terminal| terminal.managed_agent_launch_pending())
+            || self
+                .agent_info(target_ws, target_pane)
+                .is_none_or(|agent| !agent.interactive_ready)
+            || self.agent_info(source_ws, source_pane).is_none_or(|agent| {
+                matches!(
+                    agent.agent_status,
+                    crate::api::schema::AgentStatus::Working
+                        | crate::api::schema::AgentStatus::Blocked
+                )
+            })
+        {
+            return encode_error(
+                id,
+                "agent_switch_stale",
+                "the original or replacement agent changed or is busy; no pane was moved",
+            );
+        }
+        let move_response = self.handle_pane_move(
+            id.clone(),
+            crate::api::schema::PaneMoveParams {
+                pane_id: params.source_pane_id,
+                destination: crate::api::schema::PaneMoveDestination::NewTab {
+                    workspace_id: Some(self.public_workspace_id(source_ws)),
+                    label: Some(params.label),
+                },
+                focus: false,
+            },
+        );
+        let Ok(moved) = serde_json::from_str::<crate::api::schema::SuccessResponse>(&move_response)
+        else {
+            return move_response;
+        };
+        let ResponseResult::PaneMove { move_result } = moved.result else {
+            return encode_error(
+                id,
+                "agent_switch_failed",
+                "original pane move did not return a result",
+            );
+        };
+        if !move_result.changed {
+            return encode_error(
+                id,
+                "agent_switch_failed",
+                "original pane could not be archived; replacement remains available",
+            );
+        }
+        let focus_response = self.handle_pane_focus(
+            id.clone(),
+            crate::api::schema::PaneTarget {
+                pane_id: params.target_pane_id,
+            },
+        );
+        let Ok(focused) =
+            serde_json::from_str::<crate::api::schema::SuccessResponse>(&focus_response)
+        else {
+            return focus_response;
+        };
+        let ResponseResult::PaneInfo { pane } = focused.result else {
+            return encode_error(
+                id,
+                "agent_switch_failed",
+                "replacement focus did not return a pane",
+            );
+        };
+        let Some(previous_tab) = move_result.created_tab.map(|tab| tab.tab_id) else {
+            return encode_error(
+                id,
+                "agent_switch_failed",
+                "original session archive tab was not created",
+            );
+        };
+        encode_success(
+            id,
+            ResponseResult::AgentHarnessCommitted { previous_tab, pane },
+        )
+    }
+
+    pub(super) fn handle_agent_harness_context(
+        &mut self,
+        id: String,
+        params: AgentHarnessContextParams,
+    ) -> String {
+        const MAX_CONTEXT_BYTES: usize = 256 * 1024;
+        if let Err(err) = self.refresh_agent_registry_for_read() {
+            return encode_error(id, "agent_profile_load_failed", err.to_string());
+        }
+        let Some(entry) = self
+            .agent_registry
+            .roster
+            .get(&params.instance_id)
+            .filter(|entry| entry.status != crate::agent_registry::AgentStatus::Terminated)
+        else {
+            return encode_error(
+                id,
+                "agent_instance_not_found",
+                "active agent instance not found",
+            );
+        };
+        let Some(profile) = self.agent_registry.get(&entry.role) else {
+            return encode_error(id, "agent_profile_not_found", "saved profile not found");
+        };
+        let mut documents = std::collections::BTreeMap::new();
+        let mut bytes = 0usize;
+        for document in &profile.mds {
+            let content = match std::fs::read_to_string(&document.path) {
+                Ok(content) => content,
+                Err(err) => {
+                    return encode_error(
+                        id,
+                        "agent_context_unavailable",
+                        format!("{}: {err}", document.name),
+                    )
+                }
+            };
+            bytes = bytes
+                .saturating_add(document.name.len())
+                .saturating_add(content.len());
+            if bytes > MAX_CONTEXT_BYTES {
+                return encode_error(id, "agent_context_too_large", "profile documents exceed the portable handoff limit; original session remains intact");
+            }
+            documents.insert(document.name.clone(), content);
+        }
+        encode_success(
+            id,
+            ResponseResult::AgentHarnessContext {
+                harness: profile.harness.clone(),
+                documents,
             },
         )
     }
@@ -1112,6 +1307,73 @@ mod tests {
         start_deferred_agent_prompt(app, id, params)
             .recv_timeout(Duration::from_secs(1))
             .expect("agent prompt responds after submission")
+    }
+
+    #[tokio::test]
+    async fn portable_handoff_context_reads_all_attached_documents_and_fails_closed_on_oversize() {
+        let mut app = app_with_agent();
+        let root = std::env::temp_dir().join(format!("ohmyherdr-context-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("linked-notes.md");
+        std::fs::write(&path, "Saved context from linked Markdown").unwrap();
+        let profile = app.agent_registry.register_or_get("reviewer", root.clone());
+        profile.mds.push(crate::agent_registry::AgentMd {
+            name: "linked-notes.md".into(),
+            path: path.clone(),
+        });
+        let instance = app
+            .agent_registry
+            .roster_register("reviewer", "reviewer", "reviewer", "", None)
+            .unwrap()
+            .instance_id
+            .clone();
+        let response = app.handle_agent_harness_context(
+            "context:ok".into(),
+            AgentHarnessContextParams {
+                instance_id: instance.clone(),
+            },
+        );
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        let ResponseResult::AgentHarnessContext { documents, .. } = success.result else {
+            panic!("context result")
+        };
+        assert_eq!(
+            documents["linked-notes.md"],
+            "Saved context from linked Markdown"
+        );
+        std::fs::write(&path, "x".repeat(256 * 1024 + 1)).unwrap();
+        let response = app.handle_agent_harness_context(
+            "context:large".into(),
+            AgentHarnessContextParams {
+                instance_id: instance,
+            },
+        );
+        let error: crate::api::schema::ErrorResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(error.error.code, "agent_context_too_large");
+        assert_eq!(app.agent_registry.get("reviewer").unwrap().mds.len(), 1);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn commit_rejects_a_stale_instance_without_moving_its_pane() {
+        let mut app = app_with_agent();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let pane_address = app.public_pane_id(0, pane_id).unwrap();
+        let before_tabs = app.state.workspaces[0].tabs.len();
+        let response = app.handle_agent_harness_commit(
+            "commit:stale".into(),
+            crate::api::schema::AgentHarnessCommitParams {
+                source_instance_id: "another-agent".into(),
+                source_pane_id: pane_address.clone(),
+                target_instance_id: "missing-target".into(),
+                target_pane_id: "missing-pane".into(),
+                label: "Previous session (still running)".into(),
+            },
+        );
+        let error: crate::api::schema::ErrorResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(error.error.code, "agent_switch_stale");
+        assert_eq!(app.state.workspaces[0].tabs.len(), before_tabs);
+        assert_eq!(app.public_pane_id(0, pane_id), Some(pane_address));
     }
 
     #[cfg(windows)]

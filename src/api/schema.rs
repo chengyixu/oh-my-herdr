@@ -141,6 +141,10 @@ pub enum Method {
     AgentRevive(AgentReviveParams),
     #[serde(rename = "agent.roster.list")]
     AgentRosterList(EmptyParams),
+    #[serde(rename = "agent.harness.commit")]
+    AgentHarnessCommit(AgentHarnessCommitParams),
+    #[serde(rename = "agent.harness.context")]
+    AgentHarnessContext(AgentHarnessContextParams),
     #[serde(rename = "agent.harness.prepare")]
     AgentHarnessPrepare(AgentTarget),
     #[serde(rename = "agent.harness.set")]
@@ -163,6 +167,8 @@ pub enum Method {
     AgentPrompt(AgentPromptParams),
     #[serde(rename = "agent.broadcast")]
     AgentBroadcast(AgentBroadcastParams),
+    #[serde(rename = "agent.ready.wait")]
+    AgentReadyWait(AgentWaitParams),
     #[serde(rename = "agent.wait")]
     AgentWait(AgentWaitParams),
     #[serde(rename = "pane.split")]

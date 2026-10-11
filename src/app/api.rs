@@ -1142,6 +1142,12 @@ impl App {
             Method::AgentSpawn(params) => return self.handle_agent_spawn(request.id, params),
             Method::AgentRevive(params) => return self.handle_agent_revive(request.id, params),
             Method::AgentRosterList(_) => return self.handle_agent_roster_list(request.id),
+            Method::AgentHarnessCommit(params) => {
+                return self.handle_agent_harness_commit(request.id, params)
+            }
+            Method::AgentHarnessContext(params) => {
+                return self.handle_agent_harness_context(request.id, params)
+            }
             Method::AgentHarnessPrepare(params) => {
                 return self.handle_agent_harness_prepare(request.id, params)
             }
@@ -1174,11 +1180,11 @@ impl App {
                     "agent.prompt is handled asynchronously by the app runtime",
                 );
             }
-            Method::AgentWait(_) => {
+            Method::AgentWait(_) | Method::AgentReadyWait(_) => {
                 return responses::encode_error(
                     request.id,
                     "invalid_request",
-                    "agent.wait is handled by the api server",
+                    "agent wait is handled by the api server",
                 );
             }
             Method::AgentRead(params) => return self.handle_agent_read(request.id, params),

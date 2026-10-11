@@ -175,7 +175,7 @@ pub(crate) fn render_context_menu(
         .map(|item| display_width(&item.label))
         .max()
         .unwrap_or(0)
-        .max(if harness_menu { 28 } else { 0 });
+        .max(if harness_menu { 42 } else { 0 });
     let width = max_item_width
         .saturating_add(4)
         .max(14)
@@ -199,7 +199,7 @@ pub(crate) fn render_context_menu(
             inner.x,
             inner.y,
             inner.width,
-            "Harness · next launch/revival",
+            "Harness · switch now (old session kept)",
             Style::default().fg(palette.overlay1).bg(palette.panel_bg),
         );
         inner = Rect::new(

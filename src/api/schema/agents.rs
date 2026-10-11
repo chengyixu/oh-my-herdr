@@ -251,6 +251,22 @@ pub struct AgentRosterEntryInfo {
     pub last_seen_at: Option<i64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AgentHarnessContextParams {
+    pub instance_id: String,
+}
+
+/// Atomically verify both exact instances before moving the original pane
+/// into a separate tab and focusing the ready replacement.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AgentHarnessCommitParams {
+    pub source_instance_id: String,
+    pub source_pane_id: String,
+    pub target_instance_id: String,
+    pub target_pane_id: String,
+    pub label: String,
+}
+
 /// Persist one agent instance's next-revival harness without changing its
 /// running process, sibling instances, or saved profile. Null inherits profile.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

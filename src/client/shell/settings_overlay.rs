@@ -426,7 +426,11 @@ fn render_integrations(
         area.x,
         area.y + 1,
         area.width,
-        "enable session restore and, where supported, direct status updates",
+        if settings.harness_catalog_available {
+            "enable session restore and, where supported, direct status updates"
+        } else {
+            "runtime upgrade required: run ohmyherdr server live-handoff"
+        },
         Style::default().fg(palette.overlay1).bg(palette.panel_bg),
     );
     if settings.loading_integrations {
@@ -451,11 +455,26 @@ fn render_integrations(
         );
         return;
     }
-    for (index, integration) in settings.integrations.iter().enumerate() {
-        let y = area.y + 3 + index as u16;
-        if y >= area.bottom() {
-            break;
-        }
+    let available_rows = area.height.saturating_sub(6) as usize;
+    let first = settings
+        .selected
+        .saturating_sub(available_rows.saturating_sub(1));
+    for (visible, (index, integration)) in settings
+        .integrations
+        .iter()
+        .enumerate()
+        .skip(first)
+        .take(available_rows)
+        .enumerate()
+    {
+        let y = area.y + 3 + visible as u16;
+        let rect = Rect::new(area.x, y, area.width, 1);
+        let row_style = Style::default().bg(if index == settings.selected {
+            palette.surface0
+        } else {
+            palette.panel_bg
+        });
+        buffer.set_style(rect, row_style);
         let (marker, color, status) = match integration.state {
             crate::api::schema::IntegrationState::Current => ("✓", palette.green, "installed"),
             crate::api::schema::IntegrationState::Outdated => {
@@ -474,7 +493,9 @@ fn render_integrations(
             y,
             3,
             &format!(" {marker}"),
-            Style::default().fg(color).bg(palette.panel_bg),
+            Style::default()
+                .fg(color)
+                .bg(row_style.bg.unwrap_or(palette.panel_bg)),
         );
         put_text(
             buffer,
@@ -482,7 +503,9 @@ fn render_integrations(
             y,
             11.min(area.width.saturating_sub(3)),
             &format!("{:<9}", integration.label),
-            Style::default().fg(palette.subtext0).bg(palette.panel_bg),
+            Style::default()
+                .fg(palette.subtext0)
+                .bg(row_style.bg.unwrap_or(palette.panel_bg)),
         );
         put_text(
             buffer,
@@ -490,13 +513,13 @@ fn render_integrations(
             y,
             area.width.saturating_sub(14),
             status,
-            Style::default().fg(palette.overlay1).bg(palette.panel_bg),
+            Style::default()
+                .fg(palette.overlay1)
+                .bg(row_style.bg.unwrap_or(palette.panel_bg)),
         );
+        choices.push((rect, index));
     }
-    let message_y = area
-        .y
-        .saturating_add(4)
-        .saturating_add(settings.integrations.len() as u16);
+    let message_y = area.bottom().saturating_sub(2);
     for (offset, message) in settings.integration_messages.iter().take(6).enumerate() {
         let y = message_y.saturating_add(offset as u16);
         if y >= area.bottom() {

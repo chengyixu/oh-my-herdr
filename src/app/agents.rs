@@ -884,6 +884,9 @@ impl App {
                 AgentSpawnError::SpawnFailed(format!("failed to load agent registry: {err}"))
             })?;
         }
+        if let Some(profile) = preflight_profile.as_mut() {
+            apply_instance_harness(profile, crate::detect::agent_label(preflight_kind));
+        }
         if let Some(profile) = &preflight_profile {
             profile_md_args(crate::detect::agent_label(preflight_kind), &profile.mds)?;
             profile_launch_settings(crate::detect::agent_label(preflight_kind), profile)?;
@@ -905,7 +908,7 @@ impl App {
                     .alive_instance(name)
                     .is_some_and(|entry| entry.role == params.role)
         });
-        let reservation = match revive_instance_id {
+        let mut reservation = match revive_instance_id {
             Some(instance_id) => {
                 self.reserve_agent_revival(instance_id, &params.role, local_agent_names)?
             }
@@ -916,6 +919,12 @@ impl App {
                 local_agent_names,
             )?,
         };
+        if revive_instance_id.is_none() && params.kind.is_some() {
+            apply_instance_harness(
+                &mut reservation.profile,
+                crate::detect::agent_label(preflight_kind),
+            );
+        }
         let requested_kind = if revive_instance_id.is_some() {
             reservation.profile.harness.as_str()
         } else {

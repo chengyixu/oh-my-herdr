@@ -426,6 +426,7 @@ pub(super) struct ClientSettingsOverlay {
     pub(super) original_palette: Palette,
     pub(super) integrations: Vec<crate::api::schema::IntegrationInfo>,
     pub(super) harness_integrations: Vec<crate::api::schema::HarnessIntegrationInfo>,
+    pub(super) harness_catalog_available: bool,
     pub(super) integration_messages: Vec<String>,
     pub(super) loading_integrations: bool,
     pub(super) installing_integrations: bool,
@@ -652,7 +653,13 @@ pub(super) enum PendingEndpointKind {
     NativeProfileLoad,
     NativeProfileHarness,
     NativeProfileSave,
-    NativeHarnessPrepare,
+    NativeHarnessPrepare {
+        pane_id: String,
+    },
+    HarnessSwitch {
+        instance_id: String,
+        step: HarnessSwitchStep,
+    },
     HarnessIntegrationList,
     HarnessIntegrationSet,
     IntegrationList,
@@ -703,6 +710,37 @@ pub(super) enum PendingEndpointKind {
         generation: u64,
         session_generation: u64,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum HarnessSwitchStep {
+    Roster,
+    Context,
+    Read,
+    Spawn,
+    Ready,
+    Prompt,
+    NewRoster,
+    Override,
+    Commit,
+    Focus,
+}
+
+#[derive(Debug)]
+pub(super) struct LiveHarnessSwitch {
+    pub(super) instance_id: String,
+    pub(super) target: Option<String>,
+    pub(super) endpoint_id: ClientEndpointId,
+    pub(super) role: Option<String>,
+    pub(super) old_pane: Option<String>,
+    pub(super) tab_id: Option<String>,
+    pub(super) previous_harness: Option<String>,
+    pub(super) transcript: Option<String>,
+    pub(super) documents: std::collections::BTreeMap<String, String>,
+    pub(super) new_pane: Option<String>,
+    pub(super) reuse_existing: bool,
+    pub(super) new_name: Option<String>,
+    pub(super) target_instance_id: Option<String>,
 }
 
 pub(super) struct PendingEndpointRequest {
@@ -876,6 +914,7 @@ pub(super) struct ClientCopyModeState {
 }
 
 pub(crate) struct ClientShellState {
+    pub(super) live_harness_switch: Option<LiveHarnessSwitch>,
     pub(super) harness_integrations: Vec<crate::api::schema::HarnessIntegrationInfo>,
     pub(super) native_profiles: Vec<crate::api::schema::AgentProfileInfo>,
     pub(super) native_profile_endpoint: Option<ClientEndpointId>,
@@ -1045,6 +1084,7 @@ impl ClientShellState {
         Self {
             harness_integrations: Vec::new(),
             native_profiles: Vec::new(),
+            live_harness_switch: None,
             native_profile_endpoint: None,
             machine_diagnostics: Default::default(),
             config,
@@ -1251,6 +1291,7 @@ impl ClientShellState {
 
     pub(super) fn reset_endpoint_projection(&mut self) {
         self.harness_integrations.clear();
+        self.live_harness_switch = None;
         self.native_profiles.clear();
         self.native_profile_endpoint = None;
         self.hits = ShellHitMap::default();

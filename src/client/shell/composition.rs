@@ -690,6 +690,39 @@ impl ClientShellState {
             self.hits.popup = None;
         }
         restore_mode_bar(&mut frame, mode_bar, mode_bar_cells.as_deref());
+        if let Some(plan) = self.live_harness_switch.as_ref() {
+            if let Some(pane) = self
+                .hits
+                .panes
+                .iter()
+                .find(|pane| Some(pane.pane_id.as_str()) == plan.old_pane.as_deref())
+            {
+                let mut composed = frame.to_ratatui_buffer()?;
+                let row = pane.inner_rect.y.saturating_sub(1);
+                let rect = Rect::new(pane.inner_rect.x, row, pane.inner_rect.width, 1);
+                composed.set_style(
+                    rect,
+                    Style::default()
+                        .fg(self.config.palette.accent)
+                        .bg(self.config.palette.surface0),
+                );
+                render::put_text(
+                    &mut composed,
+                    rect.x,
+                    rect.y,
+                    rect.width,
+                    &format!(
+                        "Switching to {} · original session kept",
+                        plan.target.as_deref().unwrap_or("profile harness")
+                    ),
+                    Style::default()
+                        .fg(self.config.palette.accent)
+                        .bg(self.config.palette.surface0),
+                );
+                frame.replace_from_ratatui_buffer_preserving_effects(&composed, None);
+                occlusion.cover(rect);
+            }
+        }
         if let Some(bar) = mode_bar {
             occlusion.cover(bar);
         }

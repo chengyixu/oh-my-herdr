@@ -25,8 +25,13 @@ sockets, sessions, and updater.
 - A multiline document editor supporting `AGENTS.md` and additional named files.
 - Shared Spaces. Click a saved agent to open **Use space cwd**, **Use agent native
   cwd**, **Native harness**, **Edit profile**, and **Delete profile**.
-- A pane control such as `Harness: pi`. Its menu saves an exact instance's next
-  launch/revival choice while preserving its current process and sibling agents.
+- A pane control such as `Harness: pi`. Selecting another activated CLI starts
+  it now in the same space with the saved profile's directory and documents.
+  The replacement receives a bounded recent transcript as a **new conversation**;
+  private state in another CLI cannot be imported. The previous native session
+  remains available in a separate, clearly labeled tab and keeps running.
+  Finish or interrupt a working/blocked turn before switching. Returning to an
+  earlier harness reuses its previous native session when it is still active.
 - Persistent current-tab, grouped, priority, and saved-profile Agents views.
 
 ## Activation

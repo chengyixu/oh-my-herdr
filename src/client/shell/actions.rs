@@ -565,7 +565,7 @@ impl ClientShellState {
             | PendingEndpointKind::NativeProfileLoad
             | PendingEndpointKind::NativeProfileHarness
             | PendingEndpointKind::NativeProfileSave
-            | PendingEndpointKind::NativeHarnessPrepare) => {
+            | PendingEndpointKind::NativeHarnessPrepare { .. }) => {
                 return self.handle_native_profile_result(kind, result)
             }
             PendingEndpointKind::Generic => {}
@@ -826,6 +826,12 @@ impl ClientShellState {
                     Err(_) => true,
                 };
                 return (repaint, Vec::new());
+            }
+            kind @ PendingEndpointKind::HarnessSwitch { .. } => {
+                if let PendingEndpointKind::HarnessSwitch { instance_id, step } = kind {
+                    return self.handle_live_harness_switch_result(instance_id, step, result);
+                }
+                unreachable!()
             }
             kind @ (PendingEndpointKind::HarnessIntegrationList
             | PendingEndpointKind::HarnessIntegrationSet

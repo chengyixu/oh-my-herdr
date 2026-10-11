@@ -11,16 +11,18 @@ impl ClientShellState {
             .collect()
     }
 
-    pub(super) fn queue_harness_integrations(&mut self, outcome: &mut ClientShellInput) {
-        // A legacy endpoint remains connected; only the optional catalog is
-        // unavailable. Do not infer a fixed set of harnesses on its behalf.
-        let advertised = self
-            .endpoints
+    pub(super) fn harness_catalog_available(&self) -> bool {
+        self.endpoints
             .iter()
             .find(|endpoint| endpoint.endpoint_id == self.active_endpoint_id)
             .and_then(|endpoint| endpoint.methods.as_ref())
-            .is_some_and(|methods| methods.contains("integration.harness.list"));
-        if advertised {
+            .is_some_and(|methods| methods.contains("integration.harness.list"))
+    }
+
+    pub(super) fn queue_harness_integrations(&mut self, outcome: &mut ClientShellInput) {
+        // An older server may still offer status hooks without the activated
+        // harness catalog. Leave its endpoint connected and explain the gap.
+        if self.harness_catalog_available() {
             self.push_endpoint_method_with_kind(
                 Method::IntegrationHarnessList(EmptyParams::default()),
                 PendingEndpointKind::HarnessIntegrationList,

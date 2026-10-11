@@ -1245,6 +1245,45 @@
           ],
           "type": "object"
         },
+        "AgentHarnessCommitParams": {
+          "description": "Atomically verify both exact instances before moving the original pane\ninto a separate tab and focusing the ready replacement.",
+          "properties": {
+            "label": {
+              "type": "string"
+            },
+            "source_instance_id": {
+              "type": "string"
+            },
+            "source_pane_id": {
+              "type": "string"
+            },
+            "target_instance_id": {
+              "type": "string"
+            },
+            "target_pane_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "source_instance_id",
+            "source_pane_id",
+            "target_instance_id",
+            "target_pane_id",
+            "label"
+          ],
+          "type": "object"
+        },
+        "AgentHarnessContextParams": {
+          "properties": {
+            "instance_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "instance_id"
+          ],
+          "type": "object"
+        },
         "AgentHarnessSetParams": {
           "description": "Persist one agent instance's next-revival harness without changing its\nrunning process, sibling instances, or saved profile. Null inherits profile.",
           "properties": {
@@ -5778,6 +5817,38 @@
         {
           "properties": {
             "method": {
+              "const": "agent.harness.commit",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentHarnessCommitParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.harness.context",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentHarnessContextParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "agent.harness.prepare",
               "type": "string"
             },
@@ -5943,6 +6014,22 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/AgentBroadcastParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.ready.wait",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentWaitParams"
             }
           },
           "required": [
@@ -10380,6 +10467,49 @@
               "required": [
                 "type",
                 "integration"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "pane": {
+                  "$ref": "#/schemas/success_response/$defs/PaneInfo"
+                },
+                "previous_tab": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "agent_harness_committed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "previous_tab",
+                "pane"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "documents": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                "harness": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "agent_harness_context",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "harness",
+                "documents"
               ],
               "type": "object"
             },

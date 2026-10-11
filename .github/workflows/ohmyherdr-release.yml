@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Product version from Cargo.toml (for example 0.9.4)
+        description: Product version from Cargo.toml (for example 0.9.5)
         required: true
         type: string
 
@@ -83,16 +83,14 @@ jobs:
           endpoint_generation="$(sed -n 's/pub const ENDPOINT_PROTOCOL_GENERATION: u32 = \([0-9][0-9]*\);/\1/p' src/protocol/endpoint.rs)"
           cat > release-notes.md <<EOF
           ### Fixed
-          - Restored saved-agent row clicks to the launch menu: Use space cwd, Use agent native cwd, Native harness, Edit profile, and Delete profile.
-          - Fixed Settings spawn/delete shortcuts to follow the activated integration count and return to the agent pane after launching.
-          - Pinned saved-agent menu actions to the selected tab and connection; scrollbar clicks do not launch or edit a profile.
+          - Clarified when the installed client is connected to an older server: Integrations now shows a runtime-upgrade notice, highlights the selected hook, and supports mouse-wheel and keyboard navigation on small terminals.
+          - The legacy Integrations Enter key installs the selected available hook; the bulk installer remains on the i key.
 
           ### Changed
-          - Harness pickers and profile controls now consume activated Integration metadata instead of a fixed three-harness list.
-          - Expanded the terminal-only harness catalog to 40 tools, with CLI availability and per-tool launch capabilities; desktop/browser tools are excluded.
-          - Added persistent integration activation and CLI list/activate/deactivate commands. Deactivation prevents future launches without stopping current processes or deleting profiles and documents.
-          - Simplified pane headers to Harness: current-tool; selections still apply to the exact instance's next launch or revival.
-          - Integration activation uses registry format 4, which older writers preserve without modifying.
+          - The pane Harness menu switches immediately into an activated CLI. The new CLI receives saved profile documents and a bounded terminal excerpt as a new conversation.
+          - The source agent's original process and native session remain intact in a visibly labeled Previous tab. Returning to a still-running earlier harness reuses its native session and receives a bounded portable update.
+          - The server verifies exact source and replacement identities before it archives the original pane and focuses the ready replacement. An unsuccessful switch leaves the original in place.
+          - The new exact instance retains its own harness for revival, independent of the shared profile and sibling agents.
 
           ### Distribution
           - Apple Silicon macOS binary: ${asset}.

@@ -35,6 +35,7 @@ impl ClientShellState {
     pub(super) fn open_settings_overlay(&mut self) {
         self.overlay = Some(ClientShellOverlay::Settings(ClientSettingsOverlay {
             profiles: self.native_profiles.clone(),
+            harness_catalog_available: self.harness_catalog_available(),
             profile_form: None,
             profile_error: None,
             section: ClientSettingsSection::Theme,
@@ -75,7 +76,9 @@ impl ClientShellState {
                     ..
                 }))
             );
+        let catalog_available = self.harness_catalog_available();
         if let Some(ClientShellOverlay::Settings(settings)) = self.overlay.as_mut() {
+            settings.harness_catalog_available = catalog_available;
             settings.section = section;
             settings.selected = selected;
         }
@@ -253,7 +256,7 @@ impl ClientShellState {
             }
             ClientSettingsSection::Integrations => {
                 if self.harness_integrations.is_empty() {
-                    self.install_recommended_integrations(outcome);
+                    self.install_selected_integration(outcome);
                 } else {
                     self.toggle_harness_integration(outcome);
                 }
@@ -278,6 +281,33 @@ impl ClientShellState {
                 settings.loading_integrations = false;
             }
         }
+    }
+
+    fn install_selected_integration(&mut self, outcome: &mut ClientShellInput) {
+        let Some(ClientShellOverlay::Settings(settings)) = self.overlay.as_ref() else {
+            return;
+        };
+        let Some(integration) = settings.integrations.get(settings.selected) else {
+            return;
+        };
+        if !integration_needs_install(integration) || self.pending_integration_installs > 0 {
+            return;
+        }
+        let target = integration.target;
+        if self.push_endpoint_method_with_kind(
+            crate::api::schema::Method::IntegrationInstall(
+                crate::api::schema::IntegrationInstallParams { target },
+            ),
+            PendingEndpointKind::IntegrationInstall,
+            outcome,
+        ) {
+            self.pending_integration_installs = 1;
+            if let Some(ClientShellOverlay::Settings(settings)) = self.overlay.as_mut() {
+                settings.installing_integrations = true;
+                settings.integration_messages.clear();
+            }
+        }
+        outcome.repaint = true;
     }
 
     fn install_recommended_integrations(&mut self, outcome: &mut ClientShellInput) {
@@ -338,9 +368,11 @@ impl ClientShellState {
                             integrations,
                         }) => {
                             settings.integrations = integrations;
-                            settings.selected = settings
-                                .selected
-                                .min(settings.integrations.len().saturating_sub(1));
+                            if settings.harness_integrations.is_empty() {
+                                settings.selected = settings
+                                    .selected
+                                    .min(settings.integrations.len().saturating_sub(1));
+                            }
                         }
                         Ok(_) => {
                             self.set_endpoint_error(
