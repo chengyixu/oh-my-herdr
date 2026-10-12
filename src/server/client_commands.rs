@@ -22,7 +22,7 @@ const CLIENT_SHELL_METHODS: &[&str] = &[
     "agent.profile.edit",
     "agent.profile.get",
     "agent.profile.list",
-    "agent.profile.set",
+    "agent.prompt",
     "agent.ready.wait",
     "agent.revive",
     "agent.roster.list",
@@ -44,6 +44,7 @@ const CLIENT_SHELL_METHODS: &[&str] = &[
     "pane.input.set",
     "pane.link.activate",
     "pane.link.resolve",
+    "pane.read",
     "pane.rename",
     "pane.resize",
     "pane.scroll",
@@ -354,6 +355,87 @@ mod tests {
             actual, expected,
             "an existing endpoint method changed shape; add load-bearing behavior as a new advertised method or explicitly gate new fields"
         );
+    }
+
+    #[test]
+    fn live_harness_handoff_only_uses_advertised_client_shell_methods() {
+        for method in [
+            Method::AgentRosterList(crate::api::schema::EmptyParams::default()),
+            Method::AgentHarnessContext(crate::api::schema::AgentHarnessContextParams {
+                instance_id: "instance".into(),
+            }),
+            Method::PaneRead(crate::api::schema::PaneReadParams {
+                pane_id: "pane".into(),
+                source: crate::api::schema::ReadSource::Recent,
+                lines: Some(200),
+                format: crate::api::schema::ReadFormat::Text,
+                strip_ansi: true,
+                intent: Default::default(),
+            }),
+            Method::AgentSpawn(crate::api::schema::AgentSpawnParams {
+                role: "reviewer".into(),
+                kind: Some("droid".into()),
+                tab_id: Some("tab".into()),
+                cwd_mode: "agent".into(),
+                timeout_ms: Some(30_000),
+                args: Vec::new(),
+            }),
+            Method::AgentReadyWait(crate::api::schema::AgentWaitParams {
+                target: "pane".into(),
+                until: Vec::new(),
+                timeout_ms: Some(30_000),
+            }),
+            Method::AgentPrompt(crate::api::schema::AgentPromptParams {
+                target: "pane".into(),
+                text: "portable context".into(),
+                wait: None,
+            }),
+            Method::AgentHarnessSet(crate::api::schema::AgentHarnessSetParams {
+                instance_id: "instance".into(),
+                harness: Some("droid".into()),
+            }),
+            Method::AgentHarnessCommit(crate::api::schema::AgentHarnessCommitParams {
+                source_instance_id: "old".into(),
+                source_pane_id: "source".into(),
+                target_instance_id: "new".into(),
+                target_pane_id: "target".into(),
+                label: "Previous agent (still running)".into(),
+            }),
+            Method::PaneFocus(crate::api::schema::PaneTarget {
+                pane_id: "target".into(),
+            }),
+        ] {
+            assert!(
+                supports_client_shell_method(&method),
+                "live harness handoff uses unadvertised method {}",
+                crate::api::api_method_name(&method)
+            );
+        }
+    }
+
+    #[test]
+    fn live_harness_handoff_methods_are_advertised_by_this_server() {
+        for method in [
+            Method::AgentPrompt(crate::api::schema::AgentPromptParams {
+                target: "pane".into(),
+                text: "portable context".into(),
+                wait: None,
+            }),
+            Method::PaneRead(crate::api::schema::PaneReadParams {
+                pane_id: "pane".into(),
+                source: crate::api::schema::ReadSource::Recent,
+                lines: Some(200),
+                format: crate::api::schema::ReadFormat::Text,
+                strip_ansi: true,
+                intent: Default::default(),
+            }),
+        ] {
+            assert!(
+                supports_client_shell_method(&method),
+                "live harness handoff uses unadvertised method {}",
+                crate::api::api_method_name(&method),
+            );
+        }
     }
 
     #[test]
