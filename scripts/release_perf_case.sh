@@ -88,7 +88,7 @@ while IFS= read -r pane_id; do
 done < "$pane_file"
 touch "$gate"
 
-socket="$xdg/herdr/sessions/$name/herdr.sock"
+socket=$("${control_env[@]}" "$bin" session list --json | jq -r --arg name "$name" '.sessions[] | select(.name == $name) | .socket_path')
 server_pid=
 for _ in $(seq 1 80); do
   server_pid=$(lsof -t "$socket" 2>/dev/null | head -n1 || true)
