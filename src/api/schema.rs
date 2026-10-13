@@ -145,6 +145,10 @@ pub enum Method {
     AgentHarnessCommit(AgentHarnessCommitParams),
     #[serde(rename = "agent.harness.context")]
     AgentHarnessContext(AgentHarnessContextParams),
+    #[serde(rename = "agent.harness.history")]
+    AgentHarnessHistory(AgentHarnessContextParams),
+    #[serde(rename = "agent.harness.prompt")]
+    AgentHarnessPrompt(AgentHarnessPromptParams),
     #[serde(rename = "agent.harness.prepare")]
     AgentHarnessPrepare(AgentTarget),
     #[serde(rename = "agent.harness.set")]

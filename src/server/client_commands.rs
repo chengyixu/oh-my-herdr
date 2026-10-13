@@ -15,13 +15,16 @@ const ENDPOINT_RESPONSE_CHUNK_BYTES: usize = 512 * 1024;
 const CLIENT_SHELL_METHODS: &[&str] = &[
     "agent.harness.commit",
     "agent.harness.context",
+    "agent.harness.history",
     "agent.harness.prepare",
+    "agent.harness.prompt",
     "agent.harness.set",
     "agent.profile.create",
     "agent.profile.delete",
     "agent.profile.edit",
     "agent.profile.get",
     "agent.profile.list",
+    "agent.profile.set",
     "agent.prompt",
     "agent.ready.wait",
     "agent.revive",
@@ -351,6 +354,18 @@ mod tests {
                 "harness handoff method {method} changed"
             );
         }
+        let history: BTreeMap<String, String> = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/endpoint-method-shapes-ohmyherdr-v4.json"
+        )))
+        .expect("harness return history extension contract");
+        for (method, digest) in history {
+            assert_eq!(
+                actual.remove(&method).as_deref(),
+                Some(digest.as_str()),
+                "harness history method {method} changed"
+            );
+        }
         assert_eq!(
             actual, expected,
             "an existing endpoint method changed shape; add load-bearing behavior as a new advertised method or explicitly gate new fields"
@@ -360,6 +375,9 @@ mod tests {
     #[test]
     fn live_harness_handoff_only_uses_advertised_client_shell_methods() {
         for method in [
+            Method::AgentHarnessHistory(crate::api::schema::AgentHarnessContextParams {
+                instance_id: "instance".into(),
+            }),
             Method::AgentRosterList(crate::api::schema::EmptyParams::default()),
             Method::AgentHarnessContext(crate::api::schema::AgentHarnessContextParams {
                 instance_id: "instance".into(),
@@ -385,10 +403,11 @@ mod tests {
                 until: Vec::new(),
                 timeout_ms: Some(30_000),
             }),
-            Method::AgentPrompt(crate::api::schema::AgentPromptParams {
-                target: "pane".into(),
+            Method::AgentHarnessPrompt(crate::api::schema::AgentHarnessPromptParams {
+                instance_id: "instance".into(),
+                pane_id: "pane".into(),
+                harness: "droid".into(),
                 text: "portable context".into(),
-                wait: None,
             }),
             Method::AgentHarnessSet(crate::api::schema::AgentHarnessSetParams {
                 instance_id: "instance".into(),
@@ -409,31 +428,6 @@ mod tests {
                 supports_client_shell_method(&method),
                 "live harness handoff uses unadvertised method {}",
                 crate::api::api_method_name(&method)
-            );
-        }
-    }
-
-    #[test]
-    fn live_harness_handoff_methods_are_advertised_by_this_server() {
-        for method in [
-            Method::AgentPrompt(crate::api::schema::AgentPromptParams {
-                target: "pane".into(),
-                text: "portable context".into(),
-                wait: None,
-            }),
-            Method::PaneRead(crate::api::schema::PaneReadParams {
-                pane_id: "pane".into(),
-                source: crate::api::schema::ReadSource::Recent,
-                lines: Some(200),
-                format: crate::api::schema::ReadFormat::Text,
-                strip_ansi: true,
-                intent: Default::default(),
-            }),
-        ] {
-            assert!(
-                supports_client_shell_method(&method),
-                "live harness handoff uses unadvertised method {}",
-                crate::api::api_method_name(&method),
             );
         }
     }

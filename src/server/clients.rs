@@ -184,6 +184,8 @@ pub(crate) struct ClientConnection {
     pub(crate) shell_projection_revision: u64,
     /// Whether this shell is waiting for one ordered endpoint command response.
     pub(crate) shell_endpoint_command_in_flight: bool,
+    /// Cancellation for the shared asynchronous agent readiness wait.
+    pub(crate) shell_endpoint_wait_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// Surface projection epoch that owned the in-flight command. Deferred navigation may run
     /// only if this exact presentation lease is still active when its response arrives.
     pub(crate) shell_endpoint_command_surface_revision: Option<u64>,
@@ -251,6 +253,7 @@ impl ClientConnection {
             shell_agent_view: None,
             shell_projection_revision: 0,
             shell_endpoint_command_in_flight: false,
+            shell_endpoint_wait_cancel: None,
             shell_endpoint_command_surface_revision: None,
             shell_deferred_navigation_request_id: None,
             shell_deferred_navigation_response: None,

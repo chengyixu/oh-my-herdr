@@ -98,7 +98,6 @@ fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServ
 
     HeadlessServer {
         app,
-        #[cfg(unix)]
         api_tx: None,
         api_server: None,
         #[cfg(unix)]

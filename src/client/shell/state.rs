@@ -714,6 +714,7 @@ pub(super) enum PendingEndpointKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum HarnessSwitchStep {
+    History,
     Roster,
     Context,
     Read,
@@ -739,6 +740,7 @@ pub(super) struct LiveHarnessSwitch {
     pub(super) documents: std::collections::BTreeMap<String, String>,
     pub(super) new_pane: Option<String>,
     pub(super) reuse_existing: bool,
+    pub(super) return_instances: Vec<String>,
     pub(super) new_name: Option<String>,
     pub(super) target_instance_id: Option<String>,
 }

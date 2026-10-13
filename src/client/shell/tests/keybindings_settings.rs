@@ -944,7 +944,7 @@ fn terminal_harness_picker_and_profiles_follow_activation_including_unfamiliar_i
     };
     assert!(matches!(
         request.method,
-        crate::api::schema::Method::AgentRosterList(_)
+        crate::api::schema::Method::AgentHarnessHistory(_)
     ));
     assert!(state.live_harness_switch.is_some());
     state.handle_harness_integration_result(Ok(
@@ -1487,13 +1487,19 @@ fn choosing_live_harness_starts_portable_handoff_without_changing_the_running_ag
         highlighted: 2,
     }));
     let mut outcome = ClientShellInput::default();
+    state.set_endpoint_methods(Some(
+        crate::server::client_commands::supported_client_shell_method_names()
+            .iter()
+            .map(|name| (*name).into())
+            .collect(),
+    ));
     state.activate_context_menu_item(2, &mut outcome);
     let [ClientShellAction::Endpoint { request, .. }] = outcome.actions.as_slice() else {
         panic!("one handoff preflight request")
     };
     assert!(matches!(
         request.method,
-        crate::api::schema::Method::AgentRosterList(_)
+        crate::api::schema::Method::AgentHarnessHistory(_)
     ));
     assert!(state.overlay.is_none());
 }
@@ -1672,6 +1678,26 @@ fn portable_handoff_keeps_original_until_new_agent_accepts_context() {
         }),
     );
     assert!(
+        matches!(&ready[0], ClientShellAction::Endpoint { request, .. } if matches!(request.method, Method::AgentRosterList(_)))
+    );
+    let (_, ready) = state.handle_live_harness_switch_result(
+        "reviewer:1".into(),
+        HarnessSwitchStep::NewRoster,
+        Ok(ResponseResult::AgentRosterList {
+            entries: vec![AgentRosterEntryInfo {
+                instance_id: "new:2".into(),
+                profile_id: "reviewer".into(),
+                role: "reviewer".into(),
+                replica_suffix: "-replica-1".into(),
+                display_name: "reviewer-replica-1".into(),
+                status: AgentRosterStatus::Idle,
+                harness_override: None,
+                last_pane: Some("pane_new".into()),
+                last_seen_at: None,
+            }],
+        }),
+    );
+    assert!(
         matches!(&ready[0], ClientShellAction::Endpoint { request, .. } if matches!(request.method, Method::AgentReadyWait(_)))
     );
     let (_, prompt) = state.handle_live_harness_switch_result(
@@ -1684,10 +1710,12 @@ fn portable_handoff_keeps_original_until_new_agent_accepts_context() {
     let [ClientShellAction::Endpoint { request, .. }] = prompt.as_slice() else {
         panic!("portable prompt")
     };
-    let Method::AgentPrompt(params) = &request.method else {
-        panic!("native prompt")
+    let Method::AgentHarnessPrompt(params) = &request.method else {
+        panic!("exact native prompt")
     };
-    assert_eq!(params.target, "pane_new");
+    assert_eq!(params.instance_id, "new:2");
+    assert_eq!(params.pane_id, "pane_new");
+    assert_eq!(params.harness, "droid");
     assert!(params.text.contains("prior work and instructions"));
     assert!(params.text.contains("Saved directions"));
     assert!(params.text.contains("not a complete native session"));
@@ -1710,6 +1738,20 @@ fn portable_handoff_keeps_original_until_new_agent_accepts_context() {
 
 #[test]
 fn switching_back_reuses_an_existing_native_session_and_carries_recent_context() {
+    check_harness_return_candidate(true, false);
+}
+
+#[test]
+fn switching_harness_does_not_reuse_an_unrelated_sibling() {
+    check_harness_return_candidate(false, false);
+}
+
+#[test]
+fn profile_harness_alias_reuses_its_recorded_previous_session() {
+    check_harness_return_candidate(true, true);
+}
+
+fn check_harness_return_candidate(linked: bool, profile_alias: bool) {
     use crate::api::schema::*;
     let mut projected = snapshot();
     for (pane_id, tab_id, name, harness) in [
@@ -1739,38 +1781,54 @@ fn switching_back_reuses_an_existing_native_session_and_carries_recent_context()
     state.harness_integrations = vec![harness_integration_fixture("pi", true)];
     state.begin_live_harness_switch(
         "new:2".into(),
-        Some("pi".into()),
+        if profile_alias {
+            None
+        } else {
+            Some("pi".into())
+        },
         &mut ClientShellInput::default(),
     );
+    let (_, _) = state.handle_live_harness_switch_result(
+        "new:2".into(),
+        HarnessSwitchStep::History,
+        Ok(ResponseResult::AgentHarnessHistory {
+            instance_ids: if linked {
+                vec!["old:1".into()]
+            } else {
+                Vec::new()
+            },
+        }),
+    );
+    let roster = ResponseResult::AgentRosterList {
+        entries: vec![
+            AgentRosterEntryInfo {
+                instance_id: "new:2".into(),
+                profile_id: "reviewer".into(),
+                role: "reviewer".into(),
+                replica_suffix: "-replica-1".into(),
+                display_name: "reviewer-replica-1".into(),
+                status: AgentRosterStatus::Idle,
+                harness_override: Some("droid".into()),
+                last_pane: Some("pane_1".into()),
+                last_seen_at: None,
+            },
+            AgentRosterEntryInfo {
+                instance_id: "old:1".into(),
+                profile_id: "reviewer".into(),
+                role: "reviewer".into(),
+                replica_suffix: String::new(),
+                display_name: "reviewer".into(),
+                status: AgentRosterStatus::Idle,
+                harness_override: None,
+                last_pane: Some("pane_old".into()),
+                last_seen_at: None,
+            },
+        ],
+    };
     let (_, context) = state.handle_live_harness_switch_result(
         "new:2".into(),
         HarnessSwitchStep::Roster,
-        Ok(ResponseResult::AgentRosterList {
-            entries: vec![
-                AgentRosterEntryInfo {
-                    instance_id: "new:2".into(),
-                    profile_id: "reviewer".into(),
-                    role: "reviewer".into(),
-                    replica_suffix: "-replica-1".into(),
-                    display_name: "reviewer-replica-1".into(),
-                    status: AgentRosterStatus::Idle,
-                    harness_override: Some("droid".into()),
-                    last_pane: Some("pane_1".into()),
-                    last_seen_at: None,
-                },
-                AgentRosterEntryInfo {
-                    instance_id: "old:1".into(),
-                    profile_id: "reviewer".into(),
-                    role: "reviewer".into(),
-                    replica_suffix: String::new(),
-                    display_name: "reviewer".into(),
-                    status: AgentRosterStatus::Idle,
-                    harness_override: None,
-                    last_pane: Some("pane_old".into()),
-                    last_seen_at: None,
-                },
-            ],
-        }),
+        Ok(roster.clone()),
     );
     assert!(
         matches!(&context[0], ClientShellAction::Endpoint { request, .. } if matches!(request.method, Method::AgentHarnessContext(_)))
@@ -1783,6 +1841,26 @@ fn switching_back_reuses_an_existing_native_session_and_carries_recent_context()
             documents: Default::default(),
         }),
     );
+    let (_, read) = if profile_alias {
+        assert!(
+            matches!(&read[0], ClientShellAction::Endpoint { request, .. } if matches!(request.method, Method::AgentRosterList(_)))
+        );
+        state.handle_live_harness_switch_result(
+            "new:2".into(),
+            HarnessSwitchStep::Roster,
+            Ok(roster),
+        );
+        state.handle_live_harness_switch_result(
+            "new:2".into(),
+            HarnessSwitchStep::Context,
+            Ok(ResponseResult::AgentHarnessContext {
+                harness: "pi".into(),
+                documents: Default::default(),
+            }),
+        )
+    } else {
+        (false, read)
+    };
     assert!(
         matches!(&read[0], ClientShellAction::Endpoint { request, .. } if matches!(request.method, Method::PaneRead(_)))
     );
@@ -1805,10 +1883,20 @@ fn switching_back_reuses_an_existing_native_session_and_carries_recent_context()
     let [ClientShellAction::Endpoint { request, .. }] = ready.as_slice() else {
         panic!("reused native session readiness")
     };
-    assert!(
-        matches!(&request.method, Method::AgentReadyWait(params) if params.target == "pane_old")
+    if linked {
+        assert!(
+            matches!(&request.method, Method::AgentReadyWait(params) if params.target == "pane_old")
+        );
+    } else {
+        assert!(
+            matches!(&request.method, Method::AgentSpawn(_)),
+            "an unrelated sibling must keep its conversation"
+        );
+    }
+    assert_eq!(
+        state.live_harness_switch.as_ref().unwrap().reuse_existing,
+        linked
     );
-    assert!(state.live_harness_switch.as_ref().unwrap().reuse_existing);
 }
 
 #[test]
@@ -1829,8 +1917,9 @@ fn portable_handoff_archives_exact_source_only_after_context_delivery_and_overri
         documents: Default::default(),
         new_pane: Some("pane_new".into()),
         reuse_existing: false,
+        return_instances: Vec::new(),
         new_name: Some("reviewer-replica-1".into()),
-        target_instance_id: None,
+        target_instance_id: Some("new:2".into()),
     });
     let agent: AgentInfo = serde_json::from_value(serde_json::json!({
         "terminal_id":"term_new", "name":"reviewer-replica-1", "agent":"droid",
@@ -1838,30 +1927,10 @@ fn portable_handoff_archives_exact_source_only_after_context_delivery_and_overri
         "focused":true, "revision":2, "interactive_ready":true
     }))
     .unwrap();
-    let (_, roster) = state.handle_live_harness_switch_result(
+    let (_, set) = state.handle_live_harness_switch_result(
         "old:1".into(),
         HarnessSwitchStep::Prompt,
         Ok(ResponseResult::AgentPrompted { agent }),
-    );
-    assert!(
-        matches!(&roster[0], ClientShellAction::Endpoint { request, .. } if matches!(request.method, Method::AgentRosterList(_)))
-    );
-    let (_, set) = state.handle_live_harness_switch_result(
-        "old:1".into(),
-        HarnessSwitchStep::NewRoster,
-        Ok(ResponseResult::AgentRosterList {
-            entries: vec![AgentRosterEntryInfo {
-                instance_id: "new:2".into(),
-                profile_id: "reviewer".into(),
-                role: "reviewer".into(),
-                replica_suffix: "-replica-1".into(),
-                display_name: "reviewer-replica-1".into(),
-                status: AgentRosterStatus::Idle,
-                harness_override: None,
-                last_pane: Some("pane_new".into()),
-                last_seen_at: None,
-            }],
-        }),
     );
     let [ClientShellAction::Endpoint { request, .. }] = set.as_slice() else {
         panic!("exact new instance override")

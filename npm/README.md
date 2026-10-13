@@ -30,8 +30,11 @@ sockets, sessions, and updater.
   The replacement receives a bounded recent transcript as a **new conversation**;
   private state in another CLI cannot be imported. The previous native session
   remains available in a separate, clearly labeled tab and keeps running.
-  Finish or interrupt a working/blocked turn before switching. Returning to an
-  earlier harness reuses its previous native session when it is still active.
+  Finish or interrupt a working/blocked turn before switching. Resolve native
+  folder-trust and permission dialogs in the replacement pane before handoff
+  text can be submitted. Returning to an
+  earlier harness reuses its exact previous native session when recorded handoff
+  history identifies it and it is still active; sibling conversations stay separate.
 - Persistent current-tab, grouped, priority, and saved-profile Agents views.
 
 ## Activation
@@ -55,9 +58,12 @@ ready, run the updater and follow its migration guidance:
 ohmyherdr update
 ```
 
-Use `ohmyherdr update --handoff` when ready to apply a release through supported
-live handoff. Saved activation data uses registry format 4; older writers
-preserve newer registry files without modifying them.
+Use `ohmyherdr update --handoff` when ready to install this release and hand
+the running server to it. This is required to activate live harness switching;
+a plain `ohmyherdr update` keeps the running server on its existing build.
+Hand off only when ready to change the live server. Saved activation data and exact return history use
+registry format 5; older writers preserve newer registry files without modifying
+them.
 
 ## Platform support
 

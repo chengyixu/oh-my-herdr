@@ -1,7 +1,15 @@
 id = "droid"
-version = "2026.06.10.1"
+version = "2026.10.13.1"
 min_engine_version = 1
-updated_at = "2026-06-10T00:00:00Z"
+updated_at = "2026-10-13T00:00:00Z"
+
+[[rules]]
+id = "folder_trust_blocker"
+state = "blocked"
+priority = 310
+region = "bottom_non_empty_lines(8)"
+visible_blocker = true
+contains = ["trust this folder", "exit without trusting", "enter to confirm", "esc to exit"]
 
 [[rules]]
 id = "execute_selection_blocker"

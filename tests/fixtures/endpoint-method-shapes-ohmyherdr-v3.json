@@ -1,5 +1,7 @@
 {
   "agent.ready.wait": "d7f4ccc9d03ff69afdd81db0a4f027d20e7d9febd0b9e04e2f766a1ef9edcc11",
   "agent.harness.context": "70cb60afd6505909c3ded8ce4417dd03b45e72768a6ac128b6dc3f5c9c1c5cd5",
-  "agent.harness.commit": "63f01b412a4c78fd39f2592e1a70013a73d9d71a881ea1833c8cfec2998d933e"
+  "agent.harness.commit": "63f01b412a4c78fd39f2592e1a70013a73d9d71a881ea1833c8cfec2998d933e",
+  "agent.prompt": "0cb08afb7f2e5317370d8c8a6664a2109116532e21d29e94da8e92b86fd200f4",
+  "pane.read": "85dbb95417f7b04684f24c8fa9dbfa5c7a218c9829bcace71dce17ec03044960"
 }

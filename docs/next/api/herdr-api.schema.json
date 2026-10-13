@@ -1284,6 +1284,29 @@
           ],
           "type": "object"
         },
+        "AgentHarnessPromptParams": {
+          "properties": {
+            "harness": {
+              "type": "string"
+            },
+            "instance_id": {
+              "type": "string"
+            },
+            "pane_id": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "instance_id",
+            "pane_id",
+            "harness",
+            "text"
+          ],
+          "type": "object"
+        },
         "AgentHarnessSetParams": {
           "description": "Persist one agent instance's next-revival harness without changing its\nrunning process, sibling instances, or saved profile. Null inherits profile.",
           "properties": {
@@ -5838,6 +5861,38 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/AgentHarnessContextParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.harness.history",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentHarnessContextParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.harness.prompt",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentHarnessPromptParams"
             }
           },
           "required": [
@@ -10487,6 +10542,25 @@
                 "type",
                 "previous_tab",
                 "pane"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "instance_ids": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "agent_harness_history",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "instance_ids"
               ],
               "type": "object"
             },

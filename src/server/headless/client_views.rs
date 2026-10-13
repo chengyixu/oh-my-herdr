@@ -228,6 +228,7 @@ impl HeadlessServer {
         matches!(
             method,
             Method::CommandInvoke(_)
+                | Method::AgentHarnessCommit(_)
                 | Method::PaneClose(_)
                 | Method::PaneEditScrollback(_)
                 | Method::PaneMove(_)
@@ -248,6 +249,7 @@ impl HeadlessServer {
         matches!(
             method,
             Method::AgentFocus(_)
+                | Method::AgentHarnessCommit(_)
                 | Method::CommandInvoke(_)
                 | Method::LayoutSetSplitRatio(_)
                 | Method::PaneClose(_)
@@ -289,6 +291,7 @@ impl HeadlessServer {
         matches!(
             method,
             Method::AgentFocus(_)
+                | Method::AgentHarnessCommit(_)
                 | Method::CommandInvoke(_)
                 | Method::LayoutSetSplitRatio(_)
                 | Method::PaneClose(_)

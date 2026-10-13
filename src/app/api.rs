@@ -1148,6 +1148,9 @@ impl App {
             Method::AgentHarnessContext(params) => {
                 return self.handle_agent_harness_context(request.id, params)
             }
+            Method::AgentHarnessHistory(params) => {
+                return self.handle_agent_harness_history(request.id, params)
+            }
             Method::AgentHarnessPrepare(params) => {
                 return self.handle_agent_harness_prepare(request.id, params)
             }
@@ -1173,7 +1176,7 @@ impl App {
             Method::AgentProfileDelete(params) => {
                 return self.handle_agent_profile_delete(request.id, params)
             }
-            Method::AgentBroadcast(_) | Method::AgentPrompt(_) => {
+            Method::AgentBroadcast(_) | Method::AgentPrompt(_) | Method::AgentHarnessPrompt(_) => {
                 return responses::encode_error(
                     request.id,
                     "invalid_request",

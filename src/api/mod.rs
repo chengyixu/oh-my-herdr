@@ -8,8 +8,9 @@ mod wait;
 
 pub use event_hub::EventHub;
 pub use server::ServerHandle;
-pub(crate) use server::{api_method_name, start_server_with_stop_control};
+pub(crate) use server::{api_method_name, error_response_json, start_server_with_stop_control};
 pub use status::{read_runtime_status_at, RuntimeStatus};
+pub(crate) use wait::{agent_accepts_handoff_input, wait_for_agent_ready_with_cancel};
 
 use std::path::PathBuf;
 
@@ -53,6 +54,8 @@ pub(crate) fn request_changes_ui(request: &Request) -> bool {
             | Method::AgentSpawn(_)
             | Method::AgentRevive(_)
             | Method::AgentHarnessPrepare(_)
+            | Method::AgentHarnessCommit(_)
+            | Method::AgentHarnessPrompt(_)
             | Method::AgentHarnessSet(_)
             | Method::AgentProfileCreate(_)
             | Method::AgentProfileSetMd(_)

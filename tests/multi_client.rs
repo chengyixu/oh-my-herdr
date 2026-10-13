@@ -2,6 +2,8 @@
 
 #![cfg(unix)]
 
+#[path = "multi_client/portable_handoff.rs"]
+mod portable_handoff;
 pub mod support;
 
 use std::fs;
@@ -76,6 +78,15 @@ fn wait_for_socket(path: &Path, timeout: Duration) {
 }
 
 fn spawn_server(config: &Path, runtime: &Path, api: &Path) -> SpawnedHerdr {
+    spawn_server_with_env(config, runtime, api, &[])
+}
+
+fn spawn_server_with_env(
+    config: &Path,
+    runtime: &Path,
+    api: &Path,
+    extra_env: &[(&str, &str)],
+) -> SpawnedHerdr {
     fs::create_dir_all(config.join("herdr")).unwrap();
     fs::create_dir_all(runtime).unwrap();
     register_runtime_dir(runtime);
@@ -90,12 +101,17 @@ fn spawn_server(config: &Path, runtime: &Path, api: &Path) -> SpawnedHerdr {
         .unwrap();
     let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
     cmd.arg("server");
+    support::isolate_server_startup(&mut cmd);
+    cmd.env("HERDR_CONFIG_PATH", config.join("herdr/config.toml"));
     cmd.env("XDG_CONFIG_HOME", config);
     cmd.env("XDG_RUNTIME_DIR", runtime);
     cmd.env("HERDR_SOCKET_PATH", api);
     cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");
     cmd.env_remove("HERDR_ENV");
+    for (key, value) in extra_env {
+        cmd.env(key, value);
+    }
     let child = pair.slave.spawn_command(cmd).unwrap();
     register_spawned_herdr_pid(child.process_id());
     drop(pair.slave);
@@ -262,6 +278,30 @@ fn wait_for_tty_size(
         assert!(Instant::now() < deadline, "unexpected tty size: {size:?}");
         thread::sleep(Duration::from_millis(50));
     }
+}
+
+#[test]
+fn client_endpoint_readiness_uses_the_shared_async_wait_handler() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config = base.join("config");
+    let runtime = base.join("runtime");
+    let api = runtime.join("herdr.sock");
+    let clients = runtime.join("herdr-client.sock");
+    let server = spawn_server(&config, &runtime, &api);
+    wait_for_socket(&clients, Duration::from_secs(10));
+    let _pane = create_pane(&api, "endpoint-wait");
+    let mut stream = UnixStream::connect(&clients).unwrap();
+    client_shell_handshake(&mut stream, CURRENT_PROTOCOL, 100, 30).unwrap();
+    let boot_id = support::client_shell_boot_id(&mut stream);
+    let response = support::client_shell_endpoint_request(
+        &mut stream,
+        &boot_id,
+        &serde_json::json!({"id":"ready","method":"agent.ready.wait","params":{"target":"missing-agent","timeout_ms":100}}),
+    );
+    assert_eq!(response["id"], "ready");
+    assert_eq!(response["error"]["code"], "agent_not_found", "{response}");
+    cleanup(server, base);
 }
 
 #[test]

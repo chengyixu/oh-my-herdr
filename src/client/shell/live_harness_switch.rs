@@ -31,6 +31,9 @@ impl ClientShellState {
             return;
         }
         for method in [
+            Method::AgentHarnessHistory(AgentHarnessContextParams {
+                instance_id: "check".into(),
+            }),
             Method::AgentRosterList(EmptyParams::default()),
             Method::AgentHarnessContext(AgentHarnessContextParams {
                 instance_id: "check".into(),
@@ -56,10 +59,11 @@ impl ClientShellState {
                 until: Vec::new(),
                 timeout_ms: Some(30_000),
             }),
-            Method::AgentPrompt(AgentPromptParams {
-                target: "check".into(),
+            Method::AgentHarnessPrompt(AgentHarnessPromptParams {
+                instance_id: "check".into(),
+                pane_id: "check".into(),
+                harness: "check".into(),
                 text: String::new(),
-                wait: None,
             }),
             Method::AgentHarnessSet(AgentHarnessSetParams {
                 instance_id: "check".into(),
@@ -77,7 +81,7 @@ impl ClientShellState {
             }),
         ] {
             if !self.supports_endpoint_method(&method) {
-                self.set_endpoint_error("This server cannot perform a live harness handoff");
+                self.set_endpoint_error(format!("Live harness handoff requires {}. Update the connected server runtime to a version that advertises this method.", crate::api::api_method_name(&method)));
                 outcome.repaint = true;
                 return;
             }
@@ -94,14 +98,15 @@ impl ClientShellState {
             documents: Default::default(),
             new_pane: None,
             reuse_existing: false,
+            return_instances: Vec::new(),
             new_name: None,
             target_instance_id: None,
         };
         self.live_harness_switch = Some(plan);
         self.queue_live_harness_step(
-            instance_id,
-            HarnessSwitchStep::Roster,
-            Method::AgentRosterList(EmptyParams::default()),
+            instance_id.clone(),
+            HarnessSwitchStep::History,
+            Method::AgentHarnessHistory(AgentHarnessContextParams { instance_id }),
             outcome,
         );
     }
@@ -143,6 +148,16 @@ impl ClientShellState {
         };
         let result = (|| -> Result<Option<(HarnessSwitchStep, Method)>, &'static str> {
             match (step, result) {
+                (
+                    HarnessSwitchStep::History,
+                    ResponseResult::AgentHarnessHistory { instance_ids },
+                ) => {
+                    plan.return_instances = instance_ids;
+                    Ok(Some((
+                        HarnessSwitchStep::Roster,
+                        Method::AgentRosterList(EmptyParams::default()),
+                    )))
+                }
                 (HarnessSwitchStep::Roster, ResponseResult::AgentRosterList { entries }) => {
                     let entry = entries
                         .iter()
@@ -192,9 +207,11 @@ impl ClientShellState {
                     if plan.target.as_deref() == current.agent.as_deref() {
                         return Err("This pane already runs the selected harness");
                     }
+                    let source_workspace_id = pane.workspace_id.clone();
                     if let Some(target) = plan.target.as_deref() {
                         let previous = entries.iter().find_map(|candidate| {
                             if candidate.instance_id == instance_id
+                                || !plan.return_instances.contains(&candidate.instance_id)
                                 || candidate.role != entry.role
                                 || candidate.status == AgentRosterStatus::Terminated
                             {
@@ -206,6 +223,7 @@ impl ClientShellState {
                                 .iter()
                                 .find(|agent| {
                                     agent.pane_id == pane
+                                        && agent.workspace_id == source_workspace_id
                                         && agent.name.as_deref()
                                             == Some(candidate.display_name.as_str())
                                         && agent.agent.as_deref() == Some(target)
@@ -214,9 +232,11 @@ impl ClientShellState {
                                             AgentStatus::Working | AgentStatus::Blocked
                                         )
                                 })
-                                .map(|_| pane.to_string())
+                                .map(|_| (pane.to_string(), candidate.display_name.clone(), candidate.instance_id.clone()))
                         });
-                        if let Some(previous) = previous {
+                        if let Some((previous, name, id)) = previous {
+                            plan.new_name = Some(name);
+                            plan.target_instance_id = Some(id);
                             plan.new_pane = Some(previous);
                             plan.reuse_existing = true;
                         }
@@ -234,6 +254,7 @@ impl ClientShellState {
                 ) => {
                     if plan.target.is_none() {
                         plan.target = Some(harness);
+                        return Ok(Some((HarnessSwitchStep::Roster, Method::AgentRosterList(EmptyParams::default()))));
                     }
                     if plan.target == plan.previous_harness {
                         return Err("This pane already runs the profile harness");
@@ -288,30 +309,27 @@ impl ClientShellState {
                         plan.new_pane = Some(spawned.pane_id.clone());
                         plan.new_name = Some(spawned.name);
                         Ok(Some((
-                            HarnessSwitchStep::Ready,
-                            Method::AgentReadyWait(AgentWaitParams {
-                                target: spawned.pane_id,
-                                until: vec![AgentStatus::Idle],
-                                timeout_ms: Some(30_000),
-                            }),
+                            HarnessSwitchStep::NewRoster,
+                            Method::AgentRosterList(EmptyParams::default()),
                         )))
                     }
                 }
                 (HarnessSwitchStep::Ready, ResponseResult::AgentInfo { agent })
-                    if agent.interactive_ready
-                        && !agent.launch_pending
+                    if crate::api::agent_accepts_handoff_input(&agent)
                         && agent.pane_id == plan.new_pane.as_deref().unwrap_or_default()
-                        && agent.agent.as_deref() == plan.target.as_deref() =>
+                        && agent.agent.as_deref() == plan.target.as_deref()
+                        && agent.name.as_deref() == plan.new_name.as_deref() =>
                 {
                     Ok(Some((
                         HarnessSwitchStep::Prompt,
-                        Method::AgentPrompt(AgentPromptParams {
-                            target: plan
+                        Method::AgentHarnessPrompt(AgentHarnessPromptParams {
+                            instance_id: plan.target_instance_id.clone().ok_or("The exact replacement identity is missing")?,
+                            pane_id: plan
                                 .new_pane
                                 .clone()
                                 .ok_or("The replacement pane is missing")?,
+                            harness: plan.target.clone().ok_or("The replacement integration is missing")?,
                             text: Self::portable_handoff_prompt(&plan),
-                            wait: None,
                         }),
                     )))
                 }
@@ -335,24 +353,30 @@ impl ClientShellState {
                     )))
                 }
                 (HarnessSwitchStep::Prompt, ResponseResult::AgentPrompted { .. }) => Ok(Some((
-                    HarnessSwitchStep::NewRoster,
-                    Method::AgentRosterList(EmptyParams::default()),
+                    HarnessSwitchStep::Override,
+                    Method::AgentHarnessSet(AgentHarnessSetParams {
+                        instance_id: plan.target_instance_id.clone().ok_or("The exact replacement identity is missing")?,
+                        harness: plan.target.clone(),
+                    }),
                 ))),
                 (HarnessSwitchStep::NewRoster, ResponseResult::AgentRosterList { entries }) => {
                     let new = entries
                         .into_iter()
                         .find(|entry| {
                             plan.new_name.as_deref() == Some(&entry.display_name)
+                                && entry.status != AgentRosterStatus::Terminated
+                                && plan.role.as_deref() == Some(entry.role.as_str())
                                 && entry.instance_id != plan.instance_id
                                 && entry.last_pane.as_deref() == plan.new_pane.as_deref()
                         })
                         .ok_or("The new agent identity is unavailable")?;
-                    plan.target_instance_id = Some(new.instance_id.clone());
+                    plan.target_instance_id = Some(new.instance_id);
                     Ok(Some((
-                        HarnessSwitchStep::Override,
-                        Method::AgentHarnessSet(AgentHarnessSetParams {
-                            instance_id: new.instance_id,
-                            harness: plan.target.clone(),
+                        HarnessSwitchStep::Ready,
+                        Method::AgentReadyWait(AgentWaitParams {
+                            target: plan.new_pane.clone().ok_or("The replacement pane is missing")?,
+                            until: Vec::new(),
+                            timeout_ms: Some(30_000),
                         }),
                     )))
                 }
@@ -406,7 +430,7 @@ impl ClientShellState {
                     Ok(None)
                 }
                 (HarnessSwitchStep::Ready, ResponseResult::AgentInfo { .. }) => {
-                    Err("The replacement CLI has not reached its interactive prompt")
+                    Err("The replacement CLI is not ready for handoff input; finish its native confirmation or current turn before retrying")
                 }
                 _ => Err("The server returned an unexpected harness handoff response"),
             }

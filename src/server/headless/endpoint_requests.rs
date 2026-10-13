@@ -119,6 +119,62 @@ impl HeadlessServer {
                 deferred_worktree.then(|| api_request_id.clone());
             client.shell_deferred_navigation_response = deferred_navigation.then(Vec::new);
         }
+        if let api::schema::Method::AgentReadyWait(params) = &request.method {
+            let Some(api_tx) = self.api_tx.clone() else {
+                let _ = respond_to.send(crate::api::error_response_json(
+                    api_request_id,
+                    "server_unavailable",
+                    "agent readiness bridge is unavailable".into(),
+                ));
+                return false;
+            };
+            let params = params.clone();
+            let event_hub = self.app.event_hub.clone();
+            let should_quit = self.should_quit.clone();
+            let cancel = Arc::new(AtomicBool::new(false));
+            if let Some(client) = self.clients.get_mut(&client_id) {
+                client.shell_endpoint_wait_cancel = Some(cancel.clone());
+            }
+            let error_id = api_request_id.clone();
+            let error_sender = respond_to.clone();
+            if let Err(err) =
+                std::thread::Builder::new()
+                    .name("endpoint-agent-ready".into())
+                    .spawn(move || {
+                        let response = api::wait_for_agent_ready_with_cancel(
+                            api_request_id.clone(),
+                            params,
+                            &api_tx,
+                            &event_hub,
+                            || {
+                                Ok(cancel.load(Ordering::Acquire)
+                                    || should_quit.load(Ordering::Acquire))
+                            },
+                        );
+                        let response = match response {
+                            Ok(Some(response)) => response,
+                            Ok(None) => crate::api::error_response_json(
+                                api_request_id,
+                                "server_unavailable",
+                                "agent readiness wait cancelled".into(),
+                            ),
+                            Err(err) => crate::api::error_response_json(
+                                api_request_id,
+                                "server_unavailable",
+                                err.to_string(),
+                            ),
+                        };
+                        let _ = respond_to.send(response);
+                    })
+            {
+                let _ = error_sender.send(crate::api::error_response_json(
+                    error_id,
+                    "server_unavailable",
+                    err.to_string(),
+                ));
+            }
+            return false;
+        }
         let foreground_changed = self.promote_client_to_foreground(client_id);
         foreground_changed
             | self.handle_client_shell_api_request(

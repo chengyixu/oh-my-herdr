@@ -120,6 +120,9 @@ pub enum ResponseResult {
         previous_tab: String,
         pane: PaneInfo,
     },
+    AgentHarnessHistory {
+        instance_ids: Vec<String>,
+    },
     AgentHarnessContext {
         harness: String,
         documents: std::collections::BTreeMap<String, String>,

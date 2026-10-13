@@ -241,6 +241,27 @@ impl App {
         )
     }
 
+    pub(super) fn handle_agent_harness_history(
+        &mut self,
+        id: String,
+        params: AgentHarnessContextParams,
+    ) -> String {
+        if let Err(err) = self.refresh_agent_registry_for_read() {
+            return encode_error(id, "agent_profile_load_failed", err.to_string());
+        }
+        if !self.agent_registry.roster.contains_key(&params.instance_id) {
+            return encode_error(id, "agent_instance_not_found", "agent instance not found");
+        }
+        encode_success(
+            id,
+            ResponseResult::AgentHarnessHistory {
+                instance_ids: self
+                    .agent_registry
+                    .harness_handoff_instances(&params.instance_id),
+            },
+        )
+    }
+
     pub(super) fn handle_agent_harness_commit(
         &mut self,
         id: String,
@@ -320,6 +341,17 @@ impl App {
                 "agent_switch_stale",
                 "the original or replacement agent changed or is busy; no pane was moved",
             );
+        }
+        // Persist the exact return relationship before changing pane locations.
+        // A failed write must leave the original layout and focus intact.
+        if let Err(err) = self.try_update_agent_registry(|registry| {
+            registry.harness_handoffs.insert(
+                params.target_instance_id.clone(),
+                params.source_instance_id.clone(),
+            );
+            Ok::<(), std::convert::Infallible>(())
+        }) {
+            return encode_error(id, "agent_profile_persist_failed", err.to_string());
         }
         let move_response = self.handle_pane_move(
             id.clone(),
@@ -408,8 +440,20 @@ impl App {
         let mut documents = std::collections::BTreeMap::new();
         let mut bytes = 0usize;
         for document in &profile.mds {
-            let content = match std::fs::read_to_string(&document.path) {
-                Ok(content) => content,
+            let Some(remaining) =
+                MAX_CONTEXT_BYTES.checked_sub(bytes.saturating_add(document.name.len()))
+            else {
+                return encode_error(id, "agent_context_too_large", "profile documents exceed the portable handoff limit; original session remains intact");
+            };
+            let read = std::fs::File::open(&document.path)
+                .and_then(|file| crate::platform::read_limited_reader(file, remaining));
+            let content = match read {
+                Ok(crate::platform::LimitedRead::Empty) => String::new(),
+                Ok(crate::platform::LimitedRead::Complete(content)) => match String::from_utf8(content) {
+                    Ok(content) => content,
+                    Err(err) => return encode_error(id, "agent_context_unavailable", format!("{}: {err}", document.name)),
+                },
+                Ok(crate::platform::LimitedRead::Oversized) => return encode_error(id, "agent_context_too_large", "profile documents exceed the portable handoff limit; original session remains intact"),
                 Err(err) => {
                     return encode_error(
                         id,
@@ -954,8 +998,48 @@ impl App {
         if let crate::api::schema::Method::AgentBroadcast(params) = request.method {
             return self.handle_deferred_broadcast(request.id, params, respond_to);
         }
-        let crate::api::schema::Method::AgentPrompt(params) = request.method else {
-            return false;
+        let params = match request.method {
+            crate::api::schema::Method::AgentPrompt(params) => params,
+            crate::api::schema::Method::AgentHarnessPrompt(params) => {
+                if let Err(err) = self.refresh_agent_registry_for_read() {
+                    let _ = respond_to.send(encode_error(
+                        request.id,
+                        "agent_profile_load_failed",
+                        err.to_string(),
+                    ));
+                    return false;
+                }
+                let entry_matches = self
+                    .agent_registry
+                    .roster
+                    .get(&params.instance_id)
+                    .is_some_and(|entry| {
+                        entry.status != crate::agent_registry::AgentStatus::Terminated
+                            && entry.last_pane.as_deref() == Some(params.pane_id.as_str())
+                    });
+                let terminal_matches = self
+                    .parse_pane_id(&params.pane_id)
+                    .and_then(|(ws, pane)| self.state.workspaces[ws].terminal_id(pane))
+                    .and_then(|id| self.state.terminals.get(id))
+                    .is_some_and(|terminal| {
+                        terminal.live_roster_instance_id() == Some(params.instance_id.as_str())
+                            && terminal.effective_agent_label() == Some(params.harness.as_str())
+                    });
+                if !entry_matches || !terminal_matches {
+                    let _ = respond_to.send(encode_error(
+                        request.id,
+                        "agent_switch_stale",
+                        "the exact context receiver changed; no handoff text was sent",
+                    ));
+                    return false;
+                }
+                AgentPromptParams {
+                    target: params.pane_id,
+                    text: params.text,
+                    wait: None,
+                }
+            }
+            _ => return false,
         };
         match self.queue_agent_prompt(request.id, params) {
             Ok((id, agent, completion)) => {

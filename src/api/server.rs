@@ -625,6 +625,8 @@ pub(crate) fn api_method_name(method: &Method) -> &'static str {
         Method::AgentRosterList(_) => "agent.roster.list",
         Method::AgentHarnessCommit(_) => "agent.harness.commit",
         Method::AgentHarnessContext(_) => "agent.harness.context",
+        Method::AgentHarnessHistory(_) => "agent.harness.history",
+        Method::AgentHarnessPrompt(_) => "agent.harness.prompt",
         Method::AgentHarnessPrepare(_) => "agent.harness.prepare",
         Method::AgentHarnessSet(_) => "agent.harness.set",
         Method::AgentProfileCreate(_) => "agent.profile.create",
@@ -1124,7 +1126,7 @@ fn caller_timeout_dispatch_uses_timeout_error() {
     assert_eq!(error.error.code, "timeout");
 }
 
-fn error_response_json(id: String, code: &str, message: String) -> String {
+pub(crate) fn error_response_json(id: String, code: &str, message: String) -> String {
     serde_json::to_string(&ErrorResponse {
         id,
         error: ErrorBody {

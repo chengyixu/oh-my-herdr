@@ -31,7 +31,7 @@ use tracing::warn;
 
 /// Format version — bumped for structurally incompatible changes. Newer files
 /// are preserved without loading so an older binary cannot overwrite them.
-pub const REGISTRY_VERSION: u32 = 4;
+pub const REGISTRY_VERSION: u32 = 5;
 const REGISTRY_FILENAME: &str = "agents.json";
 const REGISTRY_LOCK_FILENAME: &str = ".agents.lock";
 const PROFILE_CONTEXT_DIRECTORY: &str = "agent-context";
@@ -272,6 +272,9 @@ pub struct AgentRegistry {
     /// hooks or saved profiles when migrating an older registry.
     #[serde(default)]
     pub harness_activations: BTreeMap<String, bool>,
+    /// Replacement instance -> exact source instance for validated portable handoffs.
+    #[serde(default)]
+    pub harness_handoffs: BTreeMap<String, String>,
     /// Monotonic per-registry roster instance counter.
     #[serde(default)]
     next_roster_instance: u64,
@@ -287,6 +290,25 @@ impl AgentRegistry {
             version: REGISTRY_VERSION,
             ..Self::default()
         }
+    }
+
+    /// Only sessions connected by a recorded handoff may receive a return update.
+    pub fn harness_handoff_instances(&self, instance_id: &str) -> Vec<String> {
+        let mut related = std::collections::BTreeSet::from([instance_id.to_owned()]);
+        loop {
+            let before = related.len();
+            for (target, source) in &self.harness_handoffs {
+                if related.contains(target) || related.contains(source) {
+                    related.insert(target.clone());
+                    related.insert(source.clone());
+                }
+            }
+            if related.len() == before {
+                break;
+            }
+        }
+        related.remove(instance_id);
+        related.into_iter().collect()
     }
 
     // ---- Profiles -------------------------------------------------------
@@ -1297,6 +1319,26 @@ mod tests {
         assert_eq!(encoded["harness_activations"]["pi"], false);
     }
     use super::*;
+
+    #[test]
+    fn harness_return_history_round_trips_without_linking_unrelated_instances() {
+        let mut registry = AgentRegistry::new();
+        registry
+            .harness_handoffs
+            .insert("target".into(), "source".into());
+        registry
+            .harness_handoffs
+            .insert("third".into(), "target".into());
+        registry
+            .harness_handoffs
+            .insert("source".into(), "third".into());
+        let restored = parse(&serde_json::to_string(&registry).unwrap());
+        assert_eq!(
+            restored.harness_handoff_instances("target"),
+            ["source", "third"]
+        );
+        assert!(restored.harness_handoff_instances("sibling").is_empty());
+    }
 
     fn profile(role: &str) -> AgentProfile {
         AgentProfile::new(role, PathBuf::from("/tmp"), Path::new("/tmp"))

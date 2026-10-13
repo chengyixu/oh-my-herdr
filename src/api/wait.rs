@@ -164,15 +164,30 @@ pub(super) fn wait_for_agent(
             ready_only: false,
             timeout_kind: AgentWaitTimeoutKind::Status,
         },
-        stream,
         api_tx,
         event_hub,
-        running,
+        || should_stop_connection(stream, running),
     )? {
         Some(AgentWaitOutcome::Matched(agent)) => agent_wait_success(request_id, *agent).map(Some),
         Some(AgentWaitOutcome::Response(response)) => Ok(Some(response)),
         None => Ok(None),
     }
+}
+
+/// A completed launch can still be busy or displaying a native confirmation.
+pub(crate) fn agent_accepts_handoff_input(agent: &crate::api::schema::AgentInfo) -> bool {
+    let adopted_idle = agent.name.is_some()
+        && agent.agent.is_some()
+        && matches!(
+            agent.agent_status,
+            crate::api::schema::AgentStatus::Idle | crate::api::schema::AgentStatus::Done
+        );
+    (agent.interactive_ready || adopted_idle)
+        && !agent.launch_pending
+        && !matches!(
+            agent.agent_status,
+            crate::api::schema::AgentStatus::Working | crate::api::schema::AgentStatus::Blocked
+        )
 }
 
 pub(super) fn wait_for_agent_ready(
@@ -183,6 +198,22 @@ pub(super) fn wait_for_agent_ready(
     event_hub: &EventHub,
     running: &Arc<AtomicBool>,
 ) -> std::io::Result<Option<String>> {
+    wait_for_agent_ready_with_cancel(request_id, params, api_tx, event_hub, || {
+        should_stop_connection(stream, running)
+    })
+}
+
+/// Shared readiness contract for JSON connections and client endpoint commands.
+pub(crate) fn wait_for_agent_ready_with_cancel(
+    request_id: String,
+    params: crate::api::schema::AgentWaitParams,
+    api_tx: &ApiRequestSender,
+    event_hub: &EventHub,
+    mut should_stop: impl FnMut() -> std::io::Result<bool>,
+) -> std::io::Result<Option<String>> {
+    if should_stop()? {
+        return Ok(None);
+    }
     let last_event_sequence = event_hub.current_sequence();
     let initial = match agent_get(&request_id, &params.target, api_tx) {
         Ok(agent) => agent,
@@ -192,7 +223,7 @@ pub(super) fn wait_for_agent_ready(
                 .map_err(std::io::Error::other)
         }
     };
-    if initial.interactive_ready && !initial.launch_pending {
+    if agent_accepts_handoff_input(&initial) {
         return agent_wait_success(request_id, initial).map(Some);
     }
     match wait_for_resolved_agent(
@@ -206,12 +237,11 @@ pub(super) fn wait_for_agent_ready(
             after_state_change_seq: None,
             accept_transient_status: false,
             ready_only: true,
-            timeout_kind: AgentWaitTimeoutKind::Status,
+            timeout_kind: AgentWaitTimeoutKind::Readiness,
         },
-        stream,
         api_tx,
         event_hub,
-        running,
+        should_stop,
     )? {
         Some(AgentWaitOutcome::Matched(agent)) => agent_wait_success(request_id, *agent).map(Some),
         Some(AgentWaitOutcome::Response(response)) => Ok(Some(response)),
@@ -321,10 +351,9 @@ pub(super) fn prompt_agent(
                 ready_only: false,
                 timeout_kind,
             },
-            stream,
             api_tx,
             event_hub,
-            running,
+            || should_stop_connection(stream, running),
         )?
         else {
             return Ok(None);
@@ -353,10 +382,9 @@ pub(super) fn prompt_agent(
             ready_only: false,
             timeout_kind: AgentWaitTimeoutKind::Status,
         },
-        stream,
         api_tx,
         event_hub,
-        running,
+        || should_stop_connection(stream, running),
     )?
     else {
         return Ok(None);
@@ -401,6 +429,7 @@ struct ResolvedAgentWait {
 #[derive(Clone, Copy)]
 enum AgentWaitTimeoutKind {
     Status,
+    Readiness,
     PromptStalled { timeout_ms: u64 },
 }
 
@@ -412,10 +441,9 @@ enum AgentWaitOutcome {
 fn wait_for_resolved_agent(
     request_id: String,
     wait: ResolvedAgentWait,
-    stream: &mut LocalStream,
     api_tx: &ApiRequestSender,
     event_hub: &EventHub,
-    running: &Arc<AtomicBool>,
+    mut should_stop: impl FnMut() -> std::io::Result<bool>,
 ) -> std::io::Result<Option<AgentWaitOutcome>> {
     let deadline = wait
         .timeout_ms
@@ -432,7 +460,7 @@ fn wait_for_resolved_agent(
     let mut last_event_sequence = wait.last_event_sequence;
 
     loop {
-        if should_stop_connection(stream, running)? {
+        if should_stop()? {
             return Ok(None);
         }
 
@@ -528,7 +556,7 @@ fn wait_for_resolved_agent(
                     return Ok(Some(AgentWaitOutcome::Matched(Box::new(matched))));
                 }
             }
-            if (wait.ready_only && current.interactive_ready && !current.launch_pending)
+            if (wait.ready_only && agent_accepts_handoff_input(&current))
                 || (!wait.ready_only
                     && agent_wait_matches(&current, &wait.until, wait.after_state_change_seq))
             {
@@ -555,7 +583,7 @@ fn wait_for_resolved_agent(
                     .map(AgentWaitOutcome::Response)
                     .map(Some);
             }
-            if (wait.ready_only && current.interactive_ready && !current.launch_pending)
+            if (wait.ready_only && agent_accepts_handoff_input(&current))
                 || (!wait.ready_only
                     && agent_wait_matches(&current, &wait.until, wait.after_state_change_seq))
             {
@@ -712,6 +740,10 @@ fn agent_wait_timeout(
         AgentWaitTimeoutKind::Status => {
             ("timeout", "timed out waiting for agent status".to_string())
         }
+        AgentWaitTimeoutKind::Readiness => (
+            "timeout",
+            format!("target is not ready to receive input (status {:?}); resolve native confirmations in the replacement pane before retrying", current.agent_status),
+        ),
         AgentWaitTimeoutKind::PromptStalled { timeout_ms } => {
             let status = format!("{:?}", current.agent_status).to_ascii_lowercase();
             (

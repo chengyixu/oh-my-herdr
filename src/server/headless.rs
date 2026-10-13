@@ -185,7 +185,6 @@ enum AltScreenReadConflict {
 /// The headless server — runs the herdr event loop without a real terminal.
 pub struct HeadlessServer {
     app: app::App,
-    #[cfg(unix)]
     api_tx: Option<api::ApiRequestSender>,
     // Kept on every platform so dropping HeadlessServer owns API server shutdown.
     #[cfg_attr(windows, allow(dead_code))]
@@ -329,11 +328,8 @@ impl HeadlessServer {
         let headless_size = app.state.headless_size;
         let (server_config_diagnostic, server_config_diagnostic_without_keybindings) =
             server_config_diagnostic_summaries(config_diagnostics);
-        #[cfg(not(unix))]
-        let _ = api_tx;
         Ok(Self {
             app,
-            #[cfg(unix)]
             api_tx,
             api_server,
             #[cfg(unix)]
@@ -918,6 +914,9 @@ impl HeadlessServer {
         self.tab_geometry_controllers
             .retain(|_, controller_id| *controller_id != client_id);
         if let Some(mut removed) = removed {
+            if let Some(cancel) = removed.shell_endpoint_wait_cancel.take() {
+                cancel.store(true, Ordering::Release);
+            }
             let held_inputs = removed.drain_shell_held_inputs();
             self.release_client_shell_inputs(client_id, held_inputs);
             crate::server::clipboard_image::remove_files(removed.staged_clipboard_files);
@@ -2527,6 +2526,7 @@ impl HeadlessServer {
                 if final_chunk {
                     if let Some(client) = self.clients.get_mut(&client_id) {
                         client.shell_endpoint_command_in_flight = false;
+                        client.shell_endpoint_wait_cancel = None;
                         client.shell_endpoint_command_surface_revision = None;
                         client.shell_deferred_navigation_request_id = None;
                     }
@@ -2982,7 +2982,9 @@ impl HeadlessServer {
         }
         if matches!(
             &msg.request.method,
-            api::schema::Method::AgentPrompt(_) | api::schema::Method::AgentBroadcast(_)
+            api::schema::Method::AgentPrompt(_)
+                | api::schema::Method::AgentBroadcast(_)
+                | api::schema::Method::AgentHarnessPrompt(_)
         ) {
             let deferred_changed = self
                 .app
@@ -3345,7 +3347,12 @@ impl Drop for HeadlessServer {
         let staged_files = self
             .clients
             .drain()
-            .flat_map(|(_, client)| client.staged_clipboard_files)
+            .flat_map(|(_, client)| {
+                if let Some(cancel) = client.shell_endpoint_wait_cancel {
+                    cancel.store(true, Ordering::Release);
+                }
+                client.staged_clipboard_files
+            })
             .collect::<Vec<_>>();
         crate::server::clipboard_image::remove_files(staged_files);
         let _ = self.cleanup_sockets();

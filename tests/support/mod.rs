@@ -24,6 +24,11 @@ const CLIENT_MESSAGE_CLIENT_SHELL_PANE_INPUT: u32 = 13;
 const CLIENT_MESSAGE_CLIENT_SHELL_FOCUS: u32 = 18;
 const CLIENT_MESSAGE_ENDPOINT_CONTROL: u32 = 20;
 
+/// Prevent a test server from consuming the host Herdr client's startup request.
+pub fn isolate_server_startup(command: &mut portable_pty::CommandBuilder) {
+    command.env_remove("HERDR_STARTUP_CWD");
+}
+
 pub fn register_spawned_herdr_pid(pid: Option<u32>) {
     let Some(pid) = pid else {
         return;
@@ -296,6 +301,25 @@ pub fn client_shell_handshake(
     surface_cols: u16,
     surface_rows: u16,
 ) -> Result<(u32, Option<String>), String> {
+    let value =
+        client_shell_handshake_welcome(stream, endpoint_generation, surface_cols, surface_rows)?;
+    let generation = value["generation"]
+        .as_u64()
+        .ok_or("endpoint welcome omitted generation")? as u32;
+    let error = value["error"]
+        .as_object()
+        .and_then(|error| error.get("message"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    Ok((generation, error))
+}
+
+pub fn client_shell_handshake_welcome(
+    stream: &mut UnixStream,
+    endpoint_generation: u32,
+    surface_cols: u16,
+    surface_rows: u16,
+) -> Result<serde_json::Value, String> {
     let data = serde_json::json!({
         "generation": endpoint_generation,
         "cell_width_px": 8,
@@ -330,16 +354,87 @@ pub fn client_shell_handshake(
     }
     let data = decode_string(&response, &mut offset)?;
     let value: serde_json::Value = serde_json::from_str(&data).map_err(|err| err.to_string())?;
-    let generation = value["generation"]
-        .as_u64()
-        .ok_or_else(|| "endpoint welcome omitted generation".to_owned())?
-        as u32;
-    let error = value["error"]
-        .as_object()
-        .and_then(|error| error.get("message"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_owned);
-    Ok((generation, error))
+    Ok(value)
+}
+
+pub fn client_shell_endpoint_request(
+    stream: &mut UnixStream,
+    boot_id: &str,
+    request: &serde_json::Value,
+) -> serde_json::Value {
+    let request_id = request["id"].as_str().expect("request id");
+    let payload = encode_varint_enum(
+        15,
+        &[
+            &encode_string(boot_id),
+            &encode_string(&request.to_string()),
+        ],
+    );
+    stream.write_all(&frame_message(&payload)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(40)))
+        .unwrap();
+    let mut response = Vec::new();
+    loop {
+        let (variant, data) = read_server_message(stream).expect("endpoint response frame");
+        if variant != 18 {
+            continue;
+        }
+        let mut offset = 0;
+        assert_eq!(decode_string(&data, &mut offset).unwrap(), boot_id);
+        assert_eq!(decode_string(&data, &mut offset).unwrap(), request_id);
+        let final_chunk = data[offset] != 0;
+        offset += 1;
+        let (len, consumed) = decode_varint_u32(&data, offset).unwrap();
+        offset += consumed;
+        assert_eq!(data.len() - offset, len as usize);
+        response.extend_from_slice(&data[offset..]);
+        if final_chunk {
+            return serde_json::from_slice(&response).expect("endpoint response json");
+        }
+    }
+}
+
+pub fn client_shell_boot_id(stream: &mut UnixStream) -> String {
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    loop {
+        let (variant, data) = read_server_message(stream).expect("endpoint bootstrap frame");
+        if variant != SERVER_MESSAGE_ENDPOINT_CONTROL {
+            continue;
+        }
+        let mut offset = 0;
+        let kind = decode_string(&data, &mut offset).unwrap();
+        if kind == "shell.snapshot.v1" {
+            let snapshot: serde_json::Value =
+                serde_json::from_str(&decode_string(&data, &mut offset).unwrap()).unwrap();
+            return snapshot["boot_id"].as_str().unwrap().to_owned();
+        }
+    }
+}
+
+pub fn client_shell_snapshot_until(
+    stream: &mut UnixStream,
+    matches: impl Fn(&serde_json::Value) -> bool,
+) -> serde_json::Value {
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    loop {
+        let (variant, data) = read_server_message(stream).expect("endpoint snapshot frame");
+        if variant != SERVER_MESSAGE_ENDPOINT_CONTROL {
+            continue;
+        }
+        let mut offset = 0;
+        if decode_string(&data, &mut offset).unwrap() != "shell.snapshot.v1" {
+            continue;
+        }
+        let snapshot = serde_json::from_str(&decode_string(&data, &mut offset).unwrap()).unwrap();
+        if matches(&snapshot) {
+            return snapshot;
+        }
+    }
 }
 
 pub fn read_server_message(stream: &mut UnixStream) -> Result<(u32, Vec<u8>), String> {

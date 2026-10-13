@@ -256,6 +256,14 @@ pub struct AgentHarnessContextParams {
     pub instance_id: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AgentHarnessPromptParams {
+    pub instance_id: String,
+    pub pane_id: String,
+    pub harness: String,
+    pub text: String,
+}
+
 /// Atomically verify both exact instances before moving the original pane
 /// into a separate tab and focusing the ready replacement.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
