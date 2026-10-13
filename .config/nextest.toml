@@ -1,0 +1,4 @@
+# Keep publication qualification complete when any test fails, without changing
+# the default local feedback loop or weakening failure status.
+[profile.release-qualification]
+fail-fast = false

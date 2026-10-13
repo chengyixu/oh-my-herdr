@@ -75,7 +75,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          env -u OHMYHERDR_BUILD -u HERDR_BUILD_CHANNEL -u HERDR_BUILD_ID NEXTEST_TEST_THREADS=4 just ci
+          env -u OHMYHERDR_BUILD -u HERDR_BUILD_CHANNEL -u HERDR_BUILD_ID NEXTEST_TEST_THREADS=4 NEXTEST_PROFILE=release-qualification just ci
           just docs-contract-test
           node --test npm/test/install.test.js
 

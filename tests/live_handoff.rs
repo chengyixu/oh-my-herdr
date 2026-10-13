@@ -3635,9 +3635,14 @@ fn live_handoff_shutdown_kills_survivor_after_leader_exits_during_import() {
         .as_str()
         .unwrap()
         .to_string();
+    let survivor_ready = base.join("survivor-ready");
+    let startup_delay = std::env::var("HERDR_TEST_SURVIVOR_STARTUP_DELAY")
+        .unwrap_or_else(|_| "0".into())
+        .parse::<f64>()
+        .expect("test startup delay");
     let command = format!(
-        "exec sh -c 'sh -c '\"'\"'trap \"\" HUP TERM; while :; do sleep 1; done'\"'\"' & survivor=$!; echo \"$$ $survivor\" > {}; wait'",
-        processes_marker.display()
+        "exec sh -c 'sh -c '\"'\"'sleep {startup_delay}; trap \"\" HUP TERM; echo ready > {}; while :; do sleep 1; done'\"'\"' & survivor=$!; echo \"$$ $survivor\" > {}; wait'",
+        survivor_ready.display(), processes_marker.display()
     );
     assert_ok(request(
         &api_socket,
@@ -3647,8 +3652,7 @@ fn live_handoff_shutdown_kills_survivor_after_leader_exits_during_import() {
             "params": {"pane_id": pane_id, "text": command, "keys": ["Enter"]}
         }),
     ));
-    support::wait_for_file(&processes_marker, Duration::from_secs(5));
-    let process_ids = fs::read_to_string(&processes_marker).unwrap();
+    let process_ids = wait_for_file_contains(&processes_marker, "\n", Duration::from_secs(5));
     let process_ids = process_ids
         .split_whitespace()
         .map(|value| value.parse::<u32>().unwrap())
@@ -3668,6 +3672,9 @@ fn live_handoff_shutdown_kills_survivor_after_leader_exits_during_import() {
         "leader and survivor must share a session"
     );
 
+    // The parent PID marker does not acknowledge the child's signal handlers.
+    // Trigger leader exit only after the survivor itself has installed them.
+    wait_for_file_contains(&survivor_ready, "ready\n", Duration::from_secs(5));
     let handoff_socket = api_socket.clone();
     let handoff = thread::spawn(move || {
         request(
