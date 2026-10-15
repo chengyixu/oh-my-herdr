@@ -16,6 +16,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-666666?labelColor=333333" alt="Apache 2.0 license" /></a>
   <a href="https://github.com/chengyixu/oh-my-herdr/releases/latest"><img src="https://img.shields.io/github/v/release/chengyixu/oh-my-herdr?label=release&labelColor=333333&color=666666" alt="latest release" /></a>
   <a href="https://github.com/chengyixu/oh-my-herdr/stargazers"><img src="https://img.shields.io/github/stars/chengyixu/oh-my-herdr?labelColor=333333&color=666666&logo=github" alt="GitHub stars" /></a>
+  https://www.npmjs.com/package/ohmyherdr
 </p>
 
 ---
