@@ -24,6 +24,7 @@ struct InFlightCommand {
     request_id: String,
     response: Vec<u8>,
     sent_at: Instant,
+    timeout: Duration,
 }
 
 pub(super) struct EndpointCommandResult {
@@ -119,12 +120,21 @@ impl EndpointCommands {
                 cancelled.push(request_id);
                 continue;
             }
+            let timeout = if matches!(
+                queued.request.method,
+                crate::api::schema::Method::AgentHarnessReplace(_)
+            ) {
+                Duration::from_secs(120)
+            } else {
+                ENDPOINT_COMMAND_TIMEOUT
+            };
             lane.in_flight = Some(InFlightCommand {
                 generation: queued.generation,
                 boot_id: queued.boot_id,
                 request_id,
                 response: Vec::new(),
                 sent_at: Instant::now(),
+                timeout,
             });
             break;
         }
@@ -173,7 +183,7 @@ impl EndpointCommands {
             .iter_mut()
             .filter_map(|(endpoint_id, lane)| {
                 let command = lane.in_flight.as_ref()?;
-                if now.saturating_duration_since(command.sent_at) < ENDPOINT_COMMAND_TIMEOUT {
+                if now.saturating_duration_since(command.sent_at) < command.timeout {
                     return None;
                 }
                 let command = lane.in_flight.take().expect("checked in-flight command");
@@ -316,6 +326,7 @@ mod tests {
                         request_id: "request-a".into(),
                         response: Vec::new(),
                         sent_at: Instant::now(),
+                        timeout: ENDPOINT_COMMAND_TIMEOUT,
                     }),
                     ..EndpointCommandLane::default()
                 },
@@ -453,6 +464,7 @@ mod tests {
                     request_id: "request-b".into(),
                     response: Vec::new(),
                     sent_at: Instant::now(),
+                    timeout: ENDPOINT_COMMAND_TIMEOUT,
                 }),
                 ..EndpointCommandLane::default()
             },

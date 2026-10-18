@@ -25,16 +25,14 @@ sockets, sessions, and updater.
 - A multiline document editor supporting `AGENTS.md` and additional named files.
 - Shared Spaces. Click a saved agent to open **Use space cwd**, **Use agent native
   cwd**, **Native harness**, **Edit profile**, and **Delete profile**.
-- A pane control such as `Harness: pi`. Selecting another activated CLI starts
-  it now in the same space with the saved profile's directory and documents.
-  The replacement receives a bounded recent transcript as a **new conversation**;
-  private state in another CLI cannot be imported. The previous native session
-  remains available in a separate, clearly labeled tab and keeps running.
-  Finish or interrupt a working/blocked turn before switching. Resolve native
-  folder-trust and permission dialogs in the replacement pane before handoff
-  text can be submitted. Returning to an
-  earlier harness reuses its exact previous native session when recorded handoff
-  history identifies it and it is still active; sibling conversations stay separate.
+- A pane control such as `Harness: pi`. Qualified native adapters replace the
+  harness in that same pane, preserving its pane ID, terminal, shell and layout.
+  Pi 1.1 → Codex 0.163 currently preserves complete recorded message history,
+  tool calls/results and images. Native compaction checkpoints and context
+  exclusions are preserved separately from the complete recorded history.
+  The source branch is retained for recovery.
+  Drafts, native blockers, unsupported content or unqualified integration pairs
+  stop the action before the source is closed; there is no split-pane fallback.
 - Persistent current-tab, grouped, priority, and saved-profile Agents views.
 
 ## Activation
@@ -61,8 +59,11 @@ ohmyherdr update
 Use `ohmyherdr update --handoff` when ready to install this release and hand
 the running server to it. This is required to activate live harness switching;
 a plain `ohmyherdr update` keeps the running server on its existing build.
-Hand off only when ready to change the live server. Saved activation data and exact return history use
-registry format 5; older writers preserve newer registry files without modifying
+Hand off only when ready to change the live server. Reopen the updated TUI client,
+then install the updated Pi/Codex integrations. Run `/reload` inside each existing
+Pi conversation to register its new native exporter. Saved activation data and
+native replacement recovery use
+registry format 6; older writers preserve newer registry files without modifying
 them.
 
 ## Platform support

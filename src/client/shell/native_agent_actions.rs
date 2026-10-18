@@ -467,10 +467,20 @@ impl ClientShellState {
                     }
                     _ => None,
                 };
+                let labels = self.harness_switch_labels(&harnesses, running);
+                let source_harness = running.map(str::to_string);
                 self.overlay = Some(ClientShellOverlay::ContextMenu(ClientContextMenuOverlay {
                     target: ClientContextMenuTarget::AgentHarness {
                         instance_id,
                         harnesses,
+                        labels,
+                        source_harness,
+                        source_pane: match &kind {
+                            PendingEndpointKind::NativeHarnessPrepare { pane_id } => {
+                                Some(pane_id.clone())
+                            }
+                            _ => None,
+                        },
                     },
                     x: anchor.map(|p| p.rect.x).unwrap_or(0),
                     y: anchor.map(|p| p.rect.y).unwrap_or(0),

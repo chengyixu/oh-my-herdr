@@ -1142,6 +1142,16 @@ impl App {
             Method::AgentSpawn(params) => return self.handle_agent_spawn(request.id, params),
             Method::AgentRevive(params) => return self.handle_agent_revive(request.id, params),
             Method::AgentRosterList(_) => return self.handle_agent_roster_list(request.id),
+            Method::AgentHarnessReplace(_) => {
+                return responses::encode_error(
+                    request.id,
+                    "invalid_request",
+                    "native replacement is handled asynchronously by the runtime",
+                )
+            }
+            Method::AgentContextRegister(params) => {
+                return self.handle_agent_context_register(request.id, params)
+            }
             Method::AgentHarnessCommit(params) => {
                 return self.handle_agent_harness_commit(request.id, params)
             }

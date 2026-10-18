@@ -140,6 +140,57 @@ impl Harness {
     pub fn default_harness() -> &'static str {
         HARNESSES.first().map_or("", |h| h.id)
     }
+    /// Native runtime APIs qualified for an atomic active-branch snapshot and close.
+    pub fn native_context_version(&self) -> Option<u32> {
+        match self.agent {
+            Agent::Pi if cfg!(unix) => Some(1),
+            _ => None,
+        }
+    }
+    pub fn native_context_format(&self) -> Option<&'static str> {
+        self.native_context_version().map(|_| "pi.session.v3")
+    }
+    pub fn native_import_formats(&self) -> &'static [&'static str] {
+        match self.agent {
+            Agent::Codex => &["pi.session.v3"],
+            _ => &[],
+        }
+    }
+    /// Native import adapters qualified with the installed tool, not UI labels.
+    pub fn context_import_from(&self, source_format: &str) -> bool {
+        self.native_import_formats().contains(&source_format)
+    }
+    pub(crate) fn import_native_context(
+        &self,
+        snapshot: &super::native_context::NativeContextSnapshot,
+    ) -> std::io::Result<super::session_history::ImportedHistory> {
+        if !self.context_import_from(&snapshot.format) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "complete native history import is not qualified for this pair",
+            ));
+        }
+        let history = super::session_history::read_pi_snapshot(snapshot)?;
+        match self.agent {
+            Agent::Codex => {
+                super::session_history::verify_codex_import_version(self.executable)?;
+                let provider = super::session_history::effective_codex_provider(
+                    self.executable,
+                    &snapshot.cwd,
+                )?;
+                super::session_history::import_codex_history(
+                    &history,
+                    &snapshot.cwd,
+                    &super::env::codex_dir()?,
+                    &provider,
+                )
+            }
+            _ => Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "target native history adapter unavailable",
+            )),
+        }
+    }
     pub fn available(&self) -> bool {
         super::registry::command_available(self.executable)
     }

@@ -35,6 +35,13 @@ impl HeadlessServer {
             self.send_to_client(client_id, message);
             return false;
         }
+        // Pre-native clients use this method as the first context-transfer step
+        // before spawning a replica. Keep its public JSON read contract, but stop
+        // that retired client flow before it can create another pane.
+        if matches!(request.method, api::schema::Method::AgentHarnessContext(_)) {
+            self.send_to_client(client_id,crate::server::client_commands::error_message(boot_id,request_id,"legacy_harness_client_upgrade_required","Reopen the updated Ohmyherdr client to switch in the same pane. This older client uses the retired split-pane handoff; no new pane was created"));
+            return false;
+        }
         let surface_active = client.shell_surface_active;
         if let api::schema::Method::ClientShellSurfaceSet(params) = &request.method {
             let Some((changed, projection_revision)) =

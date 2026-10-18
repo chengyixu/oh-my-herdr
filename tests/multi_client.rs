@@ -281,6 +281,36 @@ fn wait_for_tty_size(
 }
 
 #[test]
+fn legacy_harness_client_is_stopped_before_it_can_spawn_a_replica() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config = base.join("config");
+    let runtime = base.join("runtime");
+    let api = runtime.join("herdr.sock");
+    let clients = runtime.join("herdr-client.sock");
+    let server = spawn_server(&config, &runtime, &api);
+    wait_for_socket(&clients, Duration::from_secs(10));
+    create_pane(&api, "legacy-native-switch");
+    let mut stream = UnixStream::connect(&clients).unwrap();
+    client_shell_handshake(&mut stream, CURRENT_PROTOCOL, 100, 30).unwrap();
+    let boot = support::client_shell_boot_id(&mut stream);
+    let response = support::client_shell_endpoint_request(
+        &mut stream,
+        &boot,
+        &serde_json::json!({"id":"legacy-context","method":"agent.harness.context","params":{"instance_id":"legacy-instance"}}),
+    );
+    assert_eq!(
+        response["error"]["code"],
+        "legacy_harness_client_upgrade_required"
+    );
+    let panes = api_request(&api, r#"{"id":"panes","method":"pane.list","params":{}}"#);
+    assert_eq!(panes["result"]["panes"].as_array().unwrap().len(), 1);
+    let ping = api_request(&api, r#"{"id":"ping","method":"ping","params":{}}"#);
+    assert_eq!(ping["result"]["type"], "pong");
+    cleanup(server, base);
+}
+
+#[test]
 fn client_endpoint_readiness_uses_the_shared_async_wait_handler() {
     let _lock = test_lock();
     let base = unique_test_dir();

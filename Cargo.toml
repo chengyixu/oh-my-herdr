@@ -1,6 +1,6 @@
 [package]
 name = "herdr"
-version = "0.9.6"
+version = "0.9.7"
 edition = "2021"
 build = "build.rs"
 description = "terminal workspace manager for AI coding agents"
@@ -52,6 +52,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 unicode-width = "0.2"
 unicode-segmentation = "1.13.1"
 schemars = { version = "1.2.1", features = ["derive"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
 
 [patch.crates-io]
 portable-pty = { path = "vendor/portable-pty" }

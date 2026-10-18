@@ -92,6 +92,10 @@ pub struct HarnessIntegrationInfo {
     pub hook_target: Option<IntegrationTarget>,
     pub hook_state: Option<IntegrationState>,
     pub installer: Option<String>,
+    #[serde(default)]
+    pub native_context_format: Option<String>,
+    #[serde(default)]
+    pub native_import_formats: Vec<String>,
     pub profile_instructions: bool,
     #[serde(default)]
     pub capabilities: crate::agent_registry::NativeHarnessCapabilities,

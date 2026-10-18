@@ -21,7 +21,7 @@ const INVALID_AGENT_TIMEOUT_MESSAGE: &str =
     "agent start timeout must be greater than 3000ms and at most 300000ms";
 const INVALID_AGENT_NAME_MESSAGE: &str = "agent name must start with a lowercase letter and contain only lowercase letters, digits, '-' or '_' (1-32 characters)";
 
-fn valid_agent_name(name: &str) -> bool {
+pub(super) fn valid_agent_name(name: &str) -> bool {
     let mut chars = name.chars();
     matches!(chars.next(), Some('a'..='z'))
         && name.len() <= 32
@@ -567,6 +567,104 @@ impl App {
             })
     }
 
+    pub(super) fn replacement_launch_arguments(
+        &self,
+        role: &str,
+        session: &crate::agent_resume::PersistedAgentSession,
+    ) -> Result<ProfileLaunchSettings, String> {
+        let mut profile = self
+            .agent_registry
+            .get(role)
+            .cloned()
+            .ok_or("saved agent profile disappeared")?;
+        apply_instance_harness(&mut profile, &session.agent);
+        let plan = crate::agent_resume::plan(&session.source, &session.agent, &session.session_ref)
+            .ok_or("native resume command is unavailable")?;
+        let mut args = plan.argv.into_iter().skip(1).collect::<Vec<_>>();
+        let (settings, binding) = profile_launch_settings(&session.agent, &profile)
+            .map_err(|error| format!("{error:?}"))?;
+        args.extend(settings);
+        args.extend(
+            profile_md_args(&session.agent, &profile.mds).map_err(|error| format!("{error:?}"))?,
+        );
+        Ok((args, binding))
+    }
+
+    pub(super) fn start_replacement_in_shell(
+        &mut self,
+        pane_address: &str,
+        instance_id: &str,
+        name: &str,
+        session: crate::agent_resume::PersistedAgentSession,
+        args: &[String],
+        binding: Option<(String, String)>,
+    ) -> Result<(), String> {
+        let (ws, pane) = self
+            .parse_current_public_pane_id(pane_address)
+            .ok_or("the original pane changed")?;
+        let terminal_id = self.state.workspaces[ws]
+            .terminal_id(pane)
+            .cloned()
+            .ok_or("the original terminal changed")?;
+        let runtime = self
+            .terminal_runtimes
+            .get(&terminal_id)
+            .ok_or("the original terminal stopped")?;
+        let shell = available_shell_name(runtime)
+            .ok_or("the original native process has not returned to its shell")?;
+        let kind =
+            crate::detect::parse_agent_label(&session.agent).ok_or("unknown target integration")?;
+        let mut argv = vec![kind.harness().executable.to_string()];
+        // The canonical resume plan already includes the integration's launch flags.
+        argv.extend_from_slice(args);
+        let cwd = self
+            .state
+            .terminals
+            .get(&terminal_id)
+            .ok_or("the original terminal changed")?
+            .cwd
+            .clone();
+        let command = if let Some((target, source)) = binding {
+            crate::platform::interactive_shell_command_with_env_in_cwd(
+                &argv, &shell, &cwd, &target, &source,
+            )
+        } else {
+            crate::platform::interactive_shell_command_in_cwd(&argv, &shell, &cwd)
+        }
+        .ok_or("invalid target launch arguments")?;
+        let bytes = crate::app::api_helpers::encode_api_submission(runtime, &command);
+        let terminal = self
+            .state
+            .terminals
+            .get_mut(&terminal_id)
+            .ok_or("the original terminal changed")?;
+        terminal.retire_native_process_for_replacement();
+        terminal.begin_managed_agent(
+            name.to_string(),
+            kind,
+            Some(instance_id.to_string()),
+            Instant::now(),
+            AGENT_START_SETTLE_DELAY,
+            Duration::from_secs(30),
+        );
+        terminal.set_managed_agent_launch_session(session);
+        runtime
+            .try_send_bytes(Bytes::from(bytes))
+            .map_err(|error| error.to_string())?;
+        self.state.mark_session_dirty();
+        self.schedule_session_save();
+        Ok(())
+    }
+
+    pub(super) fn replacement_shell_available(
+        &self,
+        terminal_id: &crate::terminal::TerminalId,
+    ) -> bool {
+        self.terminal_runtimes
+            .get(terminal_id)
+            .is_some_and(|runtime| available_shell_name(runtime).is_some())
+    }
+
     pub(super) fn start_agent(
         &mut self,
         params: AgentStartParams,
@@ -643,7 +741,10 @@ impl App {
             .terminals
             .get(&terminal_id)
             .ok_or_else(|| AgentStartError::TargetNotFound(params.pane_id.clone()))?;
-        if terminal.is_agent_terminal() || terminal.managed_agent_kind().is_some() {
+        if terminal.native_replacement_input_paused
+            || terminal.is_agent_terminal()
+            || terminal.managed_agent_kind().is_some()
+        {
             return Err(AgentStartError::TargetBusy(params.pane_id.clone()));
         }
         let runtime = self

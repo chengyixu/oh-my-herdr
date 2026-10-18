@@ -213,12 +213,9 @@ fn client_endpoint_portable_handoff_delivers_context_and_preserves_exact_session
     );
     let sibling_pid = harness_pid(&mut stream, &boot, &sibling_pane);
 
-    let context = endpoint(
-        &mut stream,
-        &boot,
-        "agent.harness.context",
-        json!({"instance_id":source_id}),
-    );
+    // Legacy primitives retain their public JSON contract for explicit API
+    // clients. The old TUI command lane is rejected before replica creation.
+    let context=api_request(&api,&json!({"id":"context","method":"agent.harness.context","params":{"instance_id":source_id}}).to_string())["result"].clone();
     assert!(context["documents"]
         .to_string()
         .contains("PERSISTENT-DOCUMENT-CONTEXT"));

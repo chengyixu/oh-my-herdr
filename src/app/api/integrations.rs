@@ -36,6 +36,12 @@ impl App {
                     hook_target: h.hook,
                     hook_state,
                     installer: h.installer.map(Into::into),
+                    native_context_format: h.native_context_format().map(Into::into),
+                    native_import_formats: h
+                        .native_import_formats()
+                        .iter()
+                        .map(|format| (*format).to_string())
+                        .collect(),
                     profile_instructions: h.instructions != crate::harness::Instructions::Native,
                     capabilities: crate::agent_registry::native_harness_capabilities(h.id),
                 }

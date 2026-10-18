@@ -7,6 +7,7 @@ pub(crate) mod actions;
 mod agent_resume;
 pub(crate) mod agent_view;
 mod agents;
+mod harness_replace;
 pub(crate) use agents::{AGENT_START_SETTLE_DELAY, MAX_AGENT_START_TIMEOUT};
 mod api;
 #[cfg(test)]
@@ -112,6 +113,8 @@ pub struct App {
     pub(crate) policy: AppPolicy,
     pub(crate) agent_registry: crate::agent_registry::AgentRegistry,
     pub(crate) pending_agent_spawns: Vec<agents::DeferredAgentSpawn>,
+    pub(crate) pending_harness_replacements: Vec<harness_replace::PendingReplacement>,
+    pub(crate) harness_replace_deadline: Option<Instant>,
     pub(crate) pending_agent_spawn_deadline: Option<Instant>,
     pub(crate) config_diagnostic_deadline: Option<Instant>,
     pub(crate) toast_deadline: Option<Instant>,
@@ -632,6 +635,8 @@ impl App {
                 crate::agent_registry::AgentRegistry::new()
             },
             pending_agent_spawns: Vec::new(),
+            pending_harness_replacements: Vec::new(),
+            harness_replace_deadline: None,
             pending_agent_spawn_deadline: None,
             render_notify,
             render_dirty,

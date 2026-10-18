@@ -55,6 +55,7 @@ pub(crate) fn request_changes_ui(request: &Request) -> bool {
             | Method::AgentRevive(_)
             | Method::AgentHarnessPrepare(_)
             | Method::AgentHarnessCommit(_)
+            | Method::AgentHarnessReplace(_)
             | Method::AgentHarnessPrompt(_)
             | Method::AgentHarnessSet(_)
             | Method::AgentProfileCreate(_)

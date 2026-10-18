@@ -341,11 +341,20 @@ fn capture_tab(
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| "/".into()));
         let label = terminal.and_then(|terminal| terminal.manual_label.clone());
         let (agent_name, agent_roster_instance_id, managed_agent_kind) = terminal
-            .filter(|terminal| !terminal.managed_agent_launch_pending())
+            .filter(|terminal| {
+                terminal.native_replacement_recovery_session.is_some()
+                    || !terminal.managed_agent_launch_pending()
+            })
             .map(|terminal| {
                 let managed_agent_kind = terminal
-                    .managed_agent_kind()
-                    .map(|agent| crate::detect::agent_label(agent).to_string());
+                    .native_replacement_recovery_session
+                    .as_ref()
+                    .map(|session| session.agent.clone())
+                    .or_else(|| {
+                        terminal
+                            .managed_agent_kind()
+                            .map(|agent| crate::detect::agent_label(agent).to_string())
+                    });
                 (
                     terminal.agent_name.clone(),
                     terminal.live_roster_instance_id().map(ToOwned::to_owned),
@@ -355,6 +364,14 @@ fn capture_tab(
             .unwrap_or_default();
         let launch_argv = terminal.and_then(|terminal| terminal.launch_argv.clone());
         let agent_session = terminal.and_then(|terminal| {
+            if let Some(session) = &terminal.native_replacement_recovery_session {
+                return Some(PaneAgentSessionSnapshot {
+                    source: session.source.clone(),
+                    agent: session.agent.clone(),
+                    kind: session.session_ref.kind,
+                    value: session.session_ref.value.clone(),
+                });
+            }
             if let Some(authority) = terminal.hook_authority.as_ref() {
                 if let Some(session_ref) = authority.session_ref.as_ref() {
                     return Some(PaneAgentSessionSnapshot {
@@ -376,6 +393,7 @@ fn capture_tab(
                 })
         });
         let agent_resume = terminal
+            .filter(|terminal| terminal.native_replacement_recovery_session.is_none())
             .and_then(|terminal| terminal.reported_resume())
             .map(|resume| PaneAgentResumeSnapshot {
                 source: resume.source.clone(),
@@ -1383,6 +1401,61 @@ mod tests {
             crate::agent_resume::AgentSessionRefKind::Id
         );
         assert_eq!(agent_session.value, "opencode-session");
+    }
+
+    #[test]
+    fn pending_native_replacement_snapshots_restore_the_source_until_commit() {
+        let mut state = state_with_workspaces(&["one"]);
+        state.ensure_test_terminals();
+        let pane = state.workspaces[0].tabs[0].root_pane;
+        let id = state.workspaces[0].tabs[0].panes[&pane]
+            .attached_terminal_id
+            .clone();
+        let terminal = state.terminals.get_mut(&id).unwrap();
+        terminal.begin_managed_agent(
+            "same-instance".into(),
+            crate::detect::Agent::Codex,
+            Some("instance".into()),
+            std::time::Instant::now(),
+            std::time::Duration::ZERO,
+            std::time::Duration::from_secs(30),
+        );
+        terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
+            source: "herdr:codex".into(),
+            agent: "codex".into(),
+            session_ref: crate::agent_resume::AgentSessionRef::id("target").unwrap(),
+        });
+        terminal.native_replacement_recovery_session =
+            Some(crate::agent_resume::PersistedAgentSession {
+                source: "herdr:pi".into(),
+                agent: "pi".into(),
+                session_ref: crate::agent_resume::AgentSessionRef::path(
+                    "/tmp/exact-source-branch.jsonl.source",
+                )
+                .unwrap(),
+            });
+        let pending = capture_from_state(&state);
+        let saved = &pending.workspaces[0].tabs[0].panes[&pane.raw()];
+        assert_eq!(
+            saved.agent_session.as_ref().unwrap().value,
+            "/tmp/exact-source-branch.jsonl.source"
+        );
+        assert_eq!(saved.managed_agent_kind.as_deref(), Some("pi"));
+        let terminal = state.terminals.get_mut(&id).unwrap();
+        terminal.set_detected_state(
+            Some(crate::detect::Agent::Codex),
+            crate::detect::AgentState::Idle,
+        );
+        terminal.observe_codex_prompt_ready(true);
+        terminal.reconcile_managed_agent_at(
+            std::time::Instant::now() + std::time::Duration::from_secs(1),
+            false,
+        );
+        terminal.native_replacement_recovery_session = None;
+        let committed = capture_from_state(&state);
+        let saved = &committed.workspaces[0].tabs[0].panes[&pane.raw()];
+        assert_eq!(saved.agent_session.as_ref().unwrap().value, "target");
+        assert_eq!(saved.managed_agent_kind.as_deref(), Some("codex"));
     }
 
     #[test]

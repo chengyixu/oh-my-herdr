@@ -11,6 +11,47 @@ impl ClientShellState {
             .collect()
     }
 
+    pub(super) fn harness_switch_labels(
+        &self,
+        choices: &[String],
+        source: Option<&str>,
+    ) -> Vec<String> {
+        let format = source
+            .and_then(|id| {
+                self.harness_integrations
+                    .iter()
+                    .find(|integration| integration.id == id)
+            })
+            .and_then(|integration| integration.native_context_format.as_deref());
+        choices
+            .iter()
+            .map(|id| {
+                if source == Some(id.as_str()) {
+                    return format!("{id} (current)");
+                }
+                let compatible = format.is_some_and(|format| {
+                    self.harness_integrations
+                        .iter()
+                        .find(|integration| integration.id == *id)
+                        .is_some_and(|integration| {
+                            integration
+                                .native_import_formats
+                                .iter()
+                                .any(|accepted| accepted == format)
+                        })
+                });
+                format!(
+                    "{id} · {}",
+                    if compatible {
+                        "full native history"
+                    } else {
+                        "import unavailable"
+                    }
+                )
+            })
+            .collect()
+    }
+
     pub(super) fn harness_catalog_available(&self) -> bool {
         self.endpoints
             .iter()
@@ -120,14 +161,27 @@ impl ClientShellState {
                 form.harness_settings = self.harness_integrations.clone();
             }
         }
+        let menu_labels = self.overlay.as_ref().and_then(|overlay| match overlay {
+            ClientShellOverlay::ContextMenu(ClientContextMenuOverlay {
+                target: ClientContextMenuTarget::AgentHarness { source_harness, .. },
+                ..
+            }) => Some(self.harness_switch_labels(&choices, source_harness.as_deref())),
+            _ => None,
+        });
         if let Some(ClientShellOverlay::ContextMenu(menu)) = self.overlay.as_mut() {
-            if let ClientContextMenuTarget::AgentHarness { harnesses, .. } = &mut menu.target {
+            if let ClientContextMenuTarget::AgentHarness {
+                harnesses, labels, ..
+            } = &mut menu.target
+            {
                 let selected = menu
                     .highlighted
                     .checked_sub(1)
                     .and_then(|index| harnesses.get(index))
                     .cloned();
                 *harnesses = choices;
+                if let Some(updated) = menu_labels {
+                    *labels = updated;
+                }
                 menu.highlighted = selected
                     .and_then(|id| harnesses.iter().position(|h| *h == id))
                     .map_or(0, |index| index + 1);

@@ -141,12 +141,16 @@ pub enum Method {
     AgentRevive(AgentReviveParams),
     #[serde(rename = "agent.roster.list")]
     AgentRosterList(EmptyParams),
+    #[serde(rename = "agent.context.register")]
+    AgentContextRegister(AgentContextRegisterParams),
     #[serde(rename = "agent.harness.commit")]
     AgentHarnessCommit(AgentHarnessCommitParams),
     #[serde(rename = "agent.harness.context")]
     AgentHarnessContext(AgentHarnessContextParams),
     #[serde(rename = "agent.harness.history")]
     AgentHarnessHistory(AgentHarnessContextParams),
+    #[serde(rename = "agent.harness.replace")]
+    AgentHarnessReplace(AgentHarnessReplaceParams),
     #[serde(rename = "agent.harness.prompt")]
     AgentHarnessPrompt(AgentHarnessPromptParams),
     #[serde(rename = "agent.harness.prepare")]

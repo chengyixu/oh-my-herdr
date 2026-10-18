@@ -31,7 +31,7 @@ use tracing::warn;
 
 /// Format version — bumped for structurally incompatible changes. Newer files
 /// are preserved without loading so an older binary cannot overwrite them.
-pub const REGISTRY_VERSION: u32 = 5;
+pub const REGISTRY_VERSION: u32 = 6;
 const REGISTRY_FILENAME: &str = "agents.json";
 const REGISTRY_LOCK_FILENAME: &str = ".agents.lock";
 const PROFILE_CONTEXT_DIRECTORY: &str = "agent-context";
@@ -255,6 +255,16 @@ pub struct AgentRosterEntry {
     pub last_seen_at: Option<i64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeHarnessRecovery {
+    pub source: crate::agent_resume::PersistedAgentSession,
+    pub target: crate::agent_resume::PersistedAgentSession,
+    pub source_archive: PathBuf,
+    pub source_context_archive: Option<PathBuf>,
+    pub target_path: PathBuf,
+    pub phase: String,
+}
+
 /// The full registry: saved profiles (keyed by role) + the roster (keyed by
 /// stable instance id). Ordered maps keep the JSON stable for tests and diffs.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -275,6 +285,9 @@ pub struct AgentRegistry {
     /// Replacement instance -> exact source instance for validated portable handoffs.
     #[serde(default)]
     pub harness_handoffs: BTreeMap<String, String>,
+    /// Durable recovery record for same-pane native context replacements.
+    #[serde(default)]
+    pub native_harness_recovery: BTreeMap<String, NativeHarnessRecovery>,
     /// Monotonic per-registry roster instance counter.
     #[serde(default)]
     next_roster_instance: u64,

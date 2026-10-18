@@ -954,6 +954,12 @@ impl HeadlessServer {
                     else {
                         continue;
                     };
+                    if self
+                        .app
+                        .replacement_pauses_resolved_pane_input(workspace_index, runtime_pane_id)
+                    {
+                        continue;
+                    }
                     let Some(runtime) = self.app.state.runtime_for_pane_in_workspace(
                         &self.app.terminal_runtimes,
                         workspace_index,
@@ -1131,6 +1137,9 @@ impl HeadlessServer {
                 else {
                     return false;
                 };
+                if self.app.replacement_pauses_terminal_input(terminal_id) {
+                    return false;
+                }
                 if let Some(runtime) = self.runtime_for_terminal_id_string(terminal_id) {
                     let payload = paste_payload_for_runtime(runtime, &path);
                     if let Err(err) = runtime.try_send_bytes(Bytes::from(payload)) {
@@ -1152,6 +1161,12 @@ impl HeadlessServer {
                 else {
                     return false;
                 };
+                if self
+                    .app
+                    .replacement_pauses_resolved_pane_input(workspace_index, runtime_pane_id)
+                {
+                    return false;
+                }
                 let popup_blocks_input = self.app.state.popup_pane.is_some()
                     && self.popup_owner_tab_id == self.shell_tab_id_for_client(client_id);
                 if popup_blocks_input
@@ -2048,6 +2063,17 @@ impl HeadlessServer {
                 else {
                     return false;
                 };
+                if self.app.replacement_pauses_terminal_input(terminal_id) {
+                    self.send_to_client(
+                        client_id,
+                        ServerMessage::Notify {
+                            kind: protocol::NotifyKind::Toast,
+                            message: "Typing is paused during the native harness switch".into(),
+                            body: None,
+                        },
+                    );
+                    return false;
+                }
                 if let Some(runtime) = self.runtime_for_terminal_id_string(terminal_id) {
                     if let Err(err) = apply_terminal_attach_input(runtime, data) {
                         warn!(client_id, terminal_id = %terminal_id, err = %err);
@@ -2329,6 +2355,19 @@ impl HeadlessServer {
                 else {
                     return false;
                 };
+                if self
+                    .app
+                    .replacement_pauses_resolved_pane_input(workspace_index, runtime_pane_id)
+                {
+                    self.send_to_client(
+                        client_id,
+                        ServerMessage::ClientShellError {
+                            message: "Typing is paused while the harness switches in this pane"
+                                .into(),
+                        },
+                    );
+                    return false;
+                }
                 let Some(runtime) = self.app.state.runtime_for_pane_in_workspace(
                     &self.app.terminal_runtimes,
                     workspace_index,
@@ -2844,6 +2883,10 @@ impl HeadlessServer {
             return false;
         }
 
+        if self.app.replacement_pauses_api_input(&msg.request.method) {
+            let _=msg.respond_to.send(api::error_response_json(msg.request.id,"harness_switch_busy","Input is paused while this pane's native harness is being replaced; no input was sent".into()));
+            return false;
+        }
         let frozen_alt_screen_read = match self.alt_screen_read_conflict(&msg.request) {
             AltScreenReadConflict::None => None,
             AltScreenReadConflict::Frozen(snapshot) => Some(snapshot),
@@ -2979,6 +3022,11 @@ impl HeadlessServer {
                 _ => unreachable!(),
             };
             return changed;
+        }
+        if let api::schema::Method::AgentHarnessReplace(params) = msg.request.method.clone() {
+            return self
+                .app
+                .begin_harness_replacement(msg.request.id, params, msg.respond_to);
         }
         if matches!(
             &msg.request.method,
@@ -3305,6 +3353,7 @@ impl HeadlessServer {
         }
 
         changed |= self.app.complete_due_agent_spawns(now);
+        changed |= self.app.poll_harness_replacements(now);
         for update in self.app.state.reconcile_managed_agents_at(now) {
             self.app.emit_pane_state_update(&update);
             changed = true;

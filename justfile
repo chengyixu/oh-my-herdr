@@ -114,6 +114,7 @@ docs-contract-test:
 
 # Test bundled agent integration assets
 integration-assets-test:
+    bun test src/integration/assets/pi/native-context.test.ts
     bun test src/integration/assets/herdr-agent-state.test.ts
     bun test src/integration/assets/opencode/herdr-agent-state.test.ts
     bun test src/integration/assets/opencode/herdr-tui-session.test.ts

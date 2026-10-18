@@ -1307,6 +1307,24 @@
           ],
           "type": "object"
         },
+        "AgentHarnessReplaceParams": {
+          "properties": {
+            "harness": {
+              "description": "Null selects the saved profile's current default integration.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "instance_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "instance_id"
+          ],
+          "type": "object"
+        },
         "AgentHarnessSetParams": {
           "description": "Persist one agent instance's next-revival harness without changing its\nrunning process, sibling instances, or saved profile. Null inherits profile.",
           "properties": {
@@ -2739,6 +2757,59 @@
           "required": [
             "path",
             "ratio"
+          ],
+          "type": "object"
+        },
+        "NativeContextRegistration": {
+          "properties": {
+            "agent": {
+              "type": "string"
+            },
+            "endpoint": {
+              "type": "string"
+            },
+            "pane_id": {
+              "type": "string"
+            },
+            "process_id": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "seq": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "session_id": {
+              "type": "string"
+            },
+            "session_path": {
+              "type": "string"
+            },
+            "source": {
+              "type": "string"
+            },
+            "token": {
+              "type": "string"
+            },
+            "version": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "pane_id",
+            "source",
+            "agent",
+            "session_id",
+            "session_path",
+            "endpoint",
+            "token",
+            "process_id",
+            "seq",
+            "version"
           ],
           "type": "object"
         },
@@ -5840,6 +5911,22 @@
         {
           "properties": {
             "method": {
+              "const": "agent.context.register",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/NativeContextRegistration"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "agent.harness.commit",
               "type": "string"
             },
@@ -5877,6 +5964,22 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/AgentHarnessContextParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.harness.replace",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentHarnessReplaceParams"
             }
           },
           "required": [
@@ -8408,6 +8511,20 @@
             "label": {
               "type": "string"
             },
+            "native_context_format": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "native_import_formats": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
             "profile_instructions": {
               "type": "boolean"
             }
@@ -10522,6 +10639,36 @@
               "required": [
                 "type",
                 "integration"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "messages": {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "pane": {
+                  "$ref": "#/schemas/success_response/$defs/PaneInfo"
+                },
+                "source_session": {
+                  "type": "string"
+                },
+                "target_session": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "agent_harness_replaced",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "pane",
+                "source_session",
+                "target_session",
+                "messages"
               ],
               "type": "object"
             },

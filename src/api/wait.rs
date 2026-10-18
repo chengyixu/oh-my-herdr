@@ -17,6 +17,55 @@ use crate::api::subscriptions::{match_output, output_match_read_source};
 use crate::api::{ApiRequestSender, EventHub};
 use crate::ipc::LocalStream;
 
+#[cfg(test)]
+mod native_readiness_tests {
+    use super::*;
+    #[test]
+    fn readiness_observes_native_startup_without_an_unrelated_status_event() {
+        let (sender, mut requests) =
+            tokio::sync::mpsc::unbounded_channel::<crate::api::ApiRequestMessage>();
+        let worker = std::thread::spawn(move || {
+            let mut calls = 0;
+            while let Some(request) = requests.blocking_recv() {
+                calls += 1;
+                let agent=serde_json::from_value(serde_json::json!({"terminal_id":"terminal","pane_id":"pane","workspace_id":"workspace","tab_id":"tab","agent":"codex","agent_status":"unknown","focused":true,"revision":0,"interactive_ready":calls>1,"launch_pending":calls==1})).unwrap();
+                let response = serde_json::to_string(&SuccessResponse {
+                    id: request.request.id,
+                    result: ResponseResult::AgentInfo { agent },
+                })
+                .unwrap();
+                let _ = request.respond_to.send(response);
+            }
+        });
+        let mut polls = 0;
+        let result = wait_for_agent_ready_with_cancel(
+            "ready".into(),
+            crate::api::schema::AgentWaitParams {
+                target: "pane".into(),
+                until: Vec::new(),
+                timeout_ms: Some(2000),
+            },
+            &sender,
+            &EventHub::default(),
+            || {
+                polls += 1;
+                Ok(polls > 4)
+            },
+        )
+        .unwrap();
+        drop(sender);
+        worker.join().unwrap();
+        assert!(
+            result.is_some(),
+            "a native ready transition must be probed even if it emits no status event"
+        );
+        let response: SuccessResponse = serde_json::from_str(&result.unwrap()).unwrap();
+        assert!(
+            matches!(response.result,ResponseResult::AgentInfo {agent} if agent.interactive_ready)
+        );
+    }
+}
+
 const AGENT_PROMPT_EFFECT_TIMEOUT_MS: u64 = 5_000;
 
 pub(super) fn wait_for_output(
@@ -464,7 +513,9 @@ fn wait_for_resolved_agent(
             return Ok(None);
         }
 
-        let mut should_probe = false;
+        // Managed readiness can settle on a timer without changing idle/working
+        // status; an explicit ready wait must still observe that transition.
+        let mut should_probe = wait.ready_only;
         let mut matched_event_status = None;
         for (sequence, event) in event_hub.events_after(last_event_sequence) {
             last_event_sequence = sequence;

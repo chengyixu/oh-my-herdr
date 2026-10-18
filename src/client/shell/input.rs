@@ -298,6 +298,13 @@ impl ClientShellState {
             self.reconcile_input_source();
         }
         outcome.repaint |= self.resume_mobile_switcher_if_ready();
+        if let Some(source) = self
+            .live_harness_switch
+            .as_ref()
+            .and_then(|plan| plan.old_pane.as_deref())
+        {
+            outcome.requests.retain(|request|!matches!(request,ClientMessage::ClientShellPaneInput {pane_id,..} if pane_id==source));
+        }
         outcome
     }
 

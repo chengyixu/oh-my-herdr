@@ -137,6 +137,12 @@ pub struct TerminalState {
     pub agent_metadata: HashMap<String, AgentMetadata>,
     pub metadata_tokens: crate::metadata_tokens::MetadataTokens,
     pub persisted_agent_session: Option<crate::agent_resume::PersistedAgentSession>,
+    pub(crate) native_context:
+        Option<crate::integration::native_context::NativeContextRegistration>,
+    /// Snapshot capture restores this exact source until replacement commits.
+    pub(crate) native_replacement_recovery_session:
+        Option<crate::agent_resume::PersistedAgentSession>,
+    pub(crate) native_replacement_input_paused: bool,
     reported_resume: Option<crate::agent_resume::ReportedAgentResume>,
     reported_resume_revision: u64,
     pub terminal_title: Option<String>,
@@ -178,6 +184,9 @@ impl TerminalState {
             agent_metadata: HashMap::new(),
             metadata_tokens: crate::metadata_tokens::MetadataTokens::default(),
             persisted_agent_session: None,
+            native_context: None,
+            native_replacement_recovery_session: None,
+            native_replacement_input_paused: false,
             reported_resume: None,
             reported_resume_revision: 0,
             terminal_title: None,
@@ -2136,6 +2145,28 @@ impl TerminalState {
         });
     }
 
+    /// The caller has positively observed this terminal's original shell in the
+    /// foreground after the native process acknowledged graceful shutdown.
+    pub(crate) fn retire_native_process_for_replacement(&mut self) {
+        let authority = self.hook_authority.clone();
+        let _ = self.set_detected_state_with_screen_signals_at(
+            None,
+            AgentState::Unknown,
+            false,
+            false,
+            false,
+            true,
+            Instant::now(),
+        );
+        if let Some(authority) = authority {
+            let _ =
+                self.release_agent_with_mutation(&authority.source, &authority.agent_label, None);
+        }
+        self.persisted_agent_session = None;
+        self.native_context = None;
+        self.clear_agent_name();
+    }
+
     pub fn begin_managed_agent(
         &mut self,
         name: String,
@@ -2478,6 +2509,83 @@ mod tests {
 
     fn test_terminal() -> TerminalState {
         TerminalState::new(TerminalId::alloc(), "/tmp".into())
+    }
+
+    #[test]
+    fn native_replacement_retires_source_authority_before_accepting_target_identity() {
+        let mut terminal = test_terminal();
+        anchor_full_lifecycle_session(
+            &mut terminal,
+            Agent::Pi,
+            "herdr:pi",
+            "pi",
+            crate::agent_resume::AgentSessionRef::path("/tmp/source.jsonl").unwrap(),
+        );
+        terminal.set_detected_state(Some(Agent::Pi), AgentState::Idle);
+        terminal.set_hook_authority_with_session_ref(
+            "herdr:pi".into(),
+            "pi".into(),
+            AgentState::Idle,
+            None,
+            crate::agent_resume::AgentSessionRef::path("/tmp/source.jsonl"),
+            Some(10),
+        );
+        assert!(terminal.hook_authority.is_some());
+        terminal.retire_native_process_for_replacement();
+        assert!(terminal.hook_authority.is_none());
+        assert!(terminal.persisted_agent_session.is_none());
+        terminal.begin_managed_agent(
+            "same-instance".into(),
+            Agent::Codex,
+            Some("instance".into()),
+            Instant::now(),
+            Duration::ZERO,
+            Duration::from_secs(30),
+        );
+        assert!(
+            terminal.reconcile_managed_agent_at(Instant::now(), false)
+                || terminal.managed_agent_launch_pending()
+        );
+        assert_eq!(
+            terminal.managed_agent_kind(),
+            Some(Agent::Codex),
+            "the retired source must not cancel a target while it is starting"
+        );
+        terminal.set_detected_state(Some(Agent::Codex), AgentState::Idle);
+        let target = crate::agent_resume::AgentSessionRef::id("target-native-id").unwrap();
+        assert!(terminal
+            .set_agent_session_ref_for_session_start(
+                "herdr:codex".into(),
+                "codex".into(),
+                Some(target.clone()),
+                Some(20),
+                Some("resume".into())
+            )
+            .is_some());
+        assert_eq!(
+            terminal
+                .current_session_identity_for_persistence()
+                .unwrap()
+                .3,
+            target.value
+        );
+        // A delayed source status packet must not take the terminal back.
+        terminal.set_hook_authority_with_session_ref(
+            "herdr:pi".into(),
+            "pi".into(),
+            AgentState::Idle,
+            None,
+            crate::agent_resume::AgentSessionRef::path("/tmp/source.jsonl"),
+            Some(11),
+        );
+        assert_eq!(
+            terminal
+                .current_session_identity_for_persistence()
+                .unwrap()
+                .3,
+            "target-native-id"
+        );
+        assert_eq!(terminal.live_roster_instance_id(), Some("instance"));
     }
 
     fn test_session_path(name: &str) -> String {

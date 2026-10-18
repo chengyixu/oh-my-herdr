@@ -18,6 +18,7 @@ const CLIENT_SHELL_METHODS: &[&str] = &[
     "agent.harness.history",
     "agent.harness.prepare",
     "agent.harness.prompt",
+    "agent.harness.replace",
     "agent.harness.set",
     "agent.profile.create",
     "agent.profile.delete",
@@ -364,6 +365,18 @@ mod tests {
                 actual.remove(&method).as_deref(),
                 Some(digest.as_str()),
                 "harness history method {method} changed"
+            );
+        }
+        let replacement: BTreeMap<String, String> = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/endpoint-method-shapes-ohmyherdr-v5.json"
+        )))
+        .expect("native replacement contract");
+        for (method, digest) in replacement {
+            assert_eq!(
+                actual.remove(&method).as_deref(),
+                Some(digest.as_str()),
+                "native replacement method {method} changed"
             );
         }
         assert_eq!(

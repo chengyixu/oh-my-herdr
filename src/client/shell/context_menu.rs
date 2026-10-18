@@ -16,16 +16,16 @@ impl ClientContextMenuOverlay {
                 item("Edit profile", Action::EditProfile),
                 item("Delete profile", Action::DeleteProfile),
             ],
-            ClientContextMenuTarget::AgentHarness { harnesses, .. } => {
-                std::iter::once(item("Profile harness (switch now)", Action::ProfileDefault))
-                    .chain(
-                        harnesses
-                            .iter()
-                            .enumerate()
-                            .map(|(index, harness)| item(harness, Action::SetHarness(index))),
+            ClientContextMenuTarget::AgentHarness {
+                harnesses, labels, ..
+            } => std::iter::once(item("Profile harness (switch now)", Action::ProfileDefault))
+                .chain(harnesses.iter().enumerate().map(|(index, harness)| {
+                    item(
+                        labels.get(index).unwrap_or(harness),
+                        Action::SetHarness(index),
                     )
-                    .collect()
-            }
+                }))
+                .collect(),
             ClientContextMenuTarget::Workspace { is_git: false, .. } => {
                 vec![item("Rename", Action::Rename), item("Close", Action::Close)]
             }
@@ -249,12 +249,17 @@ impl ClientShellState {
             ClientContextMenuTarget::AgentHarness {
                 instance_id,
                 harnesses,
+                source_pane,
+                ..
             } => {
                 let harness = match action {
                     ClientContextMenuAction::SetHarness(index) => harnesses.get(index).cloned(),
                     _ => None,
                 };
                 self.begin_live_harness_switch(instance_id, harness, outcome);
+                if let Some(plan) = self.live_harness_switch.as_mut() {
+                    plan.old_pane = source_pane;
+                }
             }
             ClientContextMenuTarget::Workspace { workspace_id, .. } => {
                 self.activate_workspace_context_action(workspace_id, action, outcome)

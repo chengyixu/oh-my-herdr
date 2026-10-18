@@ -712,7 +712,7 @@ impl ClientShellState {
                     rect.y,
                     rect.width,
                     &format!(
-                        "Switching to {} · original session kept",
+                        "Switching to {} in this pane · typing paused",
                         plan.target.as_deref().unwrap_or("profile harness")
                     ),
                     Style::default()

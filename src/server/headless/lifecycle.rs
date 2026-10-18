@@ -36,6 +36,15 @@ impl HeadlessServer {
             .state
             .terminals
             .values()
+            .any(|terminal| terminal.native_replacement_input_paused)
+        {
+            return Err(io::Error::other("live handoff cannot run during a native harness transition; retry after it is ready"));
+        }
+        if self
+            .app
+            .state
+            .terminals
+            .values()
             .any(|terminal| terminal.managed_agent_launch_pending())
         {
             return Err(io::Error::other("live handoff cannot run while a managed agent launch is settling; retry after it is ready"));

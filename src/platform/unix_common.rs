@@ -13,6 +13,39 @@ pub(crate) fn classify_child_exit(status: &portable_pty::ExitStatus) -> super::C
     }
 }
 
+pub(crate) fn validate_private_context_endpoint(path: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    if !path.is_absolute() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "native context endpoint must be absolute",
+        ));
+    }
+    let socket = std::fs::symlink_metadata(path)?;
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "native context endpoint has no private parent",
+        )
+    })?;
+    let directory = std::fs::symlink_metadata(parent)?;
+    let owner = unsafe { libc::geteuid() };
+    if !socket.file_type().is_socket()
+        || socket.uid() != owner
+        || socket.mode() & 0o077 != 0
+        || !directory.is_dir()
+        || directory.file_type().is_symlink()
+        || directory.uid() != owner
+        || directory.mode() & 0o077 != 0
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "native context endpoint must be a private owned socket in a private owned directory",
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn read_fd(fd: std::os::fd::RawFd, data: &mut [u8]) -> std::io::Result<usize> {
     let result = unsafe { libc::read(fd, data.as_mut_ptr().cast(), data.len()) };
     if result < 0 {

@@ -2800,6 +2800,94 @@ async fn public_api_focus_replaces_every_client_shell_projection() {
 }
 
 #[tokio::test]
+async fn native_replacement_input_lease_blocks_client_and_api_writes_until_commit() {
+    let mut server = test_headless_server();
+    let mut workspace = crate::workspace::Workspace::test_new("native-input-lease");
+    let pane = workspace.tabs[0].root_pane;
+    let (runtime, mut input) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
+    workspace.insert_test_runtime(pane, runtime);
+    server.app.state.workspaces = vec![workspace];
+    server.app.state.ensure_test_terminals();
+    server.app.state.active = Some(0);
+    server.app.state.selected = 0;
+    server.app.state.mode = crate::app::Mode::Terminal;
+    let address = server.app.public_pane_id(0, pane).unwrap();
+    let terminal = server.app.state.workspaces[0]
+        .terminal_id(pane)
+        .cloned()
+        .unwrap();
+    let (_control, _render) = connect_test_shell(&mut server, 801, 100, 30);
+    while input.try_recv().is_ok() {}
+    server
+        .app
+        .state
+        .terminals
+        .get_mut(&terminal)
+        .unwrap()
+        .native_replacement_input_paused = true;
+    #[cfg(unix)]
+    {
+        let error = server
+            .perform_live_handoff(api::schema::ServerLiveHandoffParams {
+                import_exe: None,
+                expected_protocol: None,
+                expected_version: None,
+            })
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("native harness transition"),
+            "handoff must wait for the existing replacement transaction: {error}"
+        );
+    }
+    server.handle_server_event(ServerEvent::ClientShellPaneInput {
+        client_id: 801,
+        pane_id: address.clone(),
+        events: vec![crate::protocol::ClientPaneInputEvent::TextCommit(
+            "must-not-reach-shell".into(),
+        )],
+    });
+    assert!(
+        input.try_recv().is_err(),
+        "client text leaked into the replacement's shell window"
+    );
+    let (respond_to, response) = std::sync::mpsc::channel();
+    server.handle_api_request_with_shutdown_check(api::ApiRequestMessage {
+        request: api::schema::Request {
+            id: "blocked-input".into(),
+            method: api::schema::Method::PaneSendText(api::schema::PaneSendTextParams {
+                pane_id: address.clone(),
+                text: "also-must-not-reach-shell".into(),
+            }),
+        },
+        respond_to,
+        response_write_complete: None,
+    });
+    let rejected: serde_json::Value =
+        serde_json::from_str(&response.recv_timeout(Duration::from_secs(1)).unwrap()).unwrap();
+    assert_eq!(rejected["error"]["code"], "harness_switch_busy");
+    assert!(input.try_recv().is_err());
+    server
+        .app
+        .state
+        .terminals
+        .get_mut(&terminal)
+        .unwrap()
+        .native_replacement_input_paused = false;
+    server.handle_server_event(ServerEvent::ClientShellPaneInput {
+        client_id: 801,
+        pane_id: address,
+        events: vec![crate::protocol::ClientPaneInputEvent::TextCommit(
+            "accepted-after-commit".into(),
+        )],
+    });
+    assert_eq!(
+        input.try_recv().unwrap(),
+        Bytes::from_static(b"accepted-after-commit")
+    );
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
 async fn client_shell_input_targets_runtime_without_server_shell_classification() {
     let mut server = test_headless_server();
     let mut input_rx = install_focused_test_runtime(&mut server, b"\x1b[?1000h\x1b[?1006h");

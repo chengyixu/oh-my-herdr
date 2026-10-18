@@ -554,6 +554,9 @@ pub(super) enum ClientContextMenuTarget {
     AgentHarness {
         instance_id: String,
         harnesses: Vec<String>,
+        labels: Vec<String>,
+        source_harness: Option<String>,
+        source_pane: Option<String>,
     },
     Workspace {
         workspace_id: String,
@@ -714,17 +717,7 @@ pub(super) enum PendingEndpointKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum HarnessSwitchStep {
-    History,
-    Roster,
-    Context,
-    Read,
-    Spawn,
-    Ready,
-    Prompt,
-    NewRoster,
-    Override,
-    Commit,
-    Focus,
+    Replace,
 }
 
 #[derive(Debug)]
@@ -732,17 +725,7 @@ pub(super) struct LiveHarnessSwitch {
     pub(super) instance_id: String,
     pub(super) target: Option<String>,
     pub(super) endpoint_id: ClientEndpointId,
-    pub(super) role: Option<String>,
     pub(super) old_pane: Option<String>,
-    pub(super) tab_id: Option<String>,
-    pub(super) previous_harness: Option<String>,
-    pub(super) transcript: Option<String>,
-    pub(super) documents: std::collections::BTreeMap<String, String>,
-    pub(super) new_pane: Option<String>,
-    pub(super) reuse_existing: bool,
-    pub(super) return_instances: Vec<String>,
-    pub(super) new_name: Option<String>,
-    pub(super) target_instance_id: Option<String>,
 }
 
 pub(super) struct PendingEndpointRequest {

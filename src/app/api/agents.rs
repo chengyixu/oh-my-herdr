@@ -161,12 +161,46 @@ impl App {
         if let Some(entry) = terminal
             .live_roster_instance_id()
             .and_then(|instance_id| self.agent_registry.roster.get(instance_id))
+            .cloned()
         {
+            // A directly started named agent already has a stable roster id,
+            // but may not have a saved cabinet yet. Preparing its harness menu
+            // materializes that cabinet without changing the running instance.
+            if self.agent_registry.get(&entry.role).is_none() {
+                if !super::super::agents::valid_agent_name(&entry.role) {
+                    return encode_error(
+                        id,
+                        "invalid_agent_role",
+                        "the native instance has an invalid profile role",
+                    );
+                }
+                let harness = terminal
+                    .effective_agent_label()
+                    .map(str::to_string)
+                    .or_else(|| {
+                        terminal
+                            .managed_agent_kind()
+                            .map(|kind| crate::detect::agent_label(kind).to_string())
+                    });
+                let Some(harness) = harness.filter(|id| crate::harness::find(id).is_some()) else {
+                    return encode_error(
+                        id,
+                        "agent_not_ready",
+                        "the native instance has no recognized harness",
+                    );
+                };
+                let cwd = terminal.cwd.clone();
+                if let Err(error) = self.update_agent_registry(|registry| {
+                    registry.register_or_get(entry.role.clone(), cwd).harness = harness;
+                }) {
+                    return encode_error(id, "agent_profile_persist_failed", error.to_string());
+                }
+            }
             return encode_success(
                 id,
                 ResponseResult::AgentHarnessSet {
-                    instance_id: entry.instance_id.clone(),
-                    harness_override: entry.harness_override.clone(),
+                    instance_id: entry.instance_id,
+                    harness_override: entry.harness_override,
                 },
             );
         }

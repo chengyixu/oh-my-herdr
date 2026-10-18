@@ -887,9 +887,40 @@ fn harness_integration_fixture(
         hook_target: None,
         hook_state: None,
         installer: None,
+        native_context_format: None,
+        native_import_formats: Vec::new(),
         profile_instructions: false,
         capabilities: Default::default(),
     }
+}
+
+#[test]
+fn native_switch_compatibility_labels_come_from_endpoint_metadata() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut source = harness_integration_fixture("unknown-source", true);
+    source.native_context_format = Some("vendor.context.v7".into());
+    let mut target = harness_integration_fixture("unknown-target", true);
+    target.native_import_formats = vec!["vendor.context.v7".into()];
+    state.harness_integrations = vec![
+        source,
+        target,
+        harness_integration_fixture("unqualified", true),
+    ];
+    assert_eq!(
+        state.harness_switch_labels(
+            &[
+                "unknown-source".into(),
+                "unknown-target".into(),
+                "unqualified".into()
+            ],
+            Some("unknown-source")
+        ),
+        [
+            "unknown-source (current)",
+            "unknown-target · full native history",
+            "unqualified · import unavailable"
+        ]
+    );
 }
 
 #[test]
@@ -935,7 +966,10 @@ fn terminal_harness_picker_and_profiles_follow_activation_including_unfamiliar_i
             .iter()
             .map(|item| item.label.as_str())
             .collect::<Vec<_>>(),
-        ["Profile harness (switch now)", "future-cli"]
+        [
+            "Profile harness (switch now)",
+            "future-cli · import unavailable"
+        ]
     );
     let mut outcome = ClientShellInput::default();
     state.activate_context_menu_item(1, &mut outcome);
@@ -944,7 +978,7 @@ fn terminal_harness_picker_and_profiles_follow_activation_including_unfamiliar_i
     };
     assert!(matches!(
         request.method,
-        crate::api::schema::Method::AgentHarnessHistory(_)
+        crate::api::schema::Method::AgentHarnessReplace(_)
     ));
     assert!(state.live_harness_switch.is_some());
     state.handle_harness_integration_result(Ok(
@@ -1472,7 +1506,7 @@ fn live_harness_menu_highlights_the_running_cli_instead_of_a_saved_override() {
 }
 
 #[test]
-fn choosing_live_harness_starts_portable_handoff_without_changing_the_running_agent() {
+fn choosing_live_harness_requests_same_pane_replacement() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
@@ -1481,6 +1515,9 @@ fn choosing_live_harness_starts_portable_handoff_without_changing_the_running_ag
         target: ClientContextMenuTarget::AgentHarness {
             instance_id: "reviewer:1".into(),
             harnesses: vec!["pi".into(), "droid".into()],
+            labels: Vec::new(),
+            source_harness: Some("pi".into()),
+            source_pane: Some("pane_1".into()),
         },
         x: 0,
         y: 0,
@@ -1499,458 +1536,89 @@ fn choosing_live_harness_starts_portable_handoff_without_changing_the_running_ag
     };
     assert!(matches!(
         request.method,
-        crate::api::schema::Method::AgentHarnessHistory(_)
+        crate::api::schema::Method::AgentHarnessReplace(_)
     ));
     assert!(state.overlay.is_none());
+    assert_eq!(
+        state
+            .live_harness_switch
+            .as_ref()
+            .unwrap()
+            .old_pane
+            .as_deref(),
+        Some("pane_1")
+    );
+    let paused = state.handle_input_bytes(b"typing-during-switch");
+    assert!(paused.requests.iter().all(|request|!matches!(request,ClientMessage::ClientShellPaneInput {pane_id,..} if pane_id=="pane_1")));
+    state.live_harness_switch.as_mut().unwrap().old_pane = Some("different-pane".into());
+    let other = state.handle_input_bytes(b"other-pane");
+    assert!(other.requests.iter().any(|request|matches!(request,ClientMessage::ClientShellPaneInput {pane_id,..} if pane_id=="pane_1")));
 }
 
 #[test]
-fn portable_handoff_refuses_busy_source_without_changing_any_pane() {
-    use crate::api::schema::*;
-    let mut projected = snapshot();
-    projected.agents.push(ClientShellAgent {
-        pane_id: "pane_1".into(),
-        workspace_id: "ws_1".into(),
-        tab_id: "tab_1".into(),
-        name: Some("reviewer".into()),
-        display_agent: None,
-        agent: Some("pi".into()),
-        title: None,
-        terminal_title: None,
-        terminal_title_stripped: None,
-        agent_status: AgentStatus::Working,
-        state_change_seq: 1,
-        state_labels: Vec::new(),
-        tokens: Vec::new(),
-        focused: true,
-    });
+fn same_pane_switch_rejection_never_queues_a_replica_or_context_prompt() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
-    state.set_snapshot(Box::new(projected));
+    state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
-    state.harness_integrations = vec![harness_integration_fixture("droid", true)];
-    state.begin_live_harness_switch(
-        "reviewer:1".into(),
-        Some("droid".into()),
-        &mut ClientShellInput::default(),
+    state.harness_integrations = vec![harness_integration_fixture("codex", true)];
+    let mut input = ClientShellInput::default();
+    state.begin_live_harness_switch("exact-instance".into(), Some("codex".into()), &mut input);
+    let [ClientShellAction::Endpoint { request, .. }] = input.actions.as_slice() else {
+        panic!("one native replacement request");
+    };
+    assert!(
+        matches!(&request.method, crate::api::schema::Method::AgentHarnessReplace(params)
+        if params.instance_id == "exact-instance" && params.harness.as_deref() == Some("codex"))
     );
     let (_, actions) = state.handle_live_harness_switch_result(
-        "reviewer:1".into(),
-        HarnessSwitchStep::Roster,
-        Ok(ResponseResult::AgentRosterList {
-            entries: vec![AgentRosterEntryInfo {
-                instance_id: "reviewer:1".into(),
-                profile_id: "reviewer".into(),
-                role: "reviewer".into(),
-                replica_suffix: String::new(),
-                display_name: "reviewer".into(),
-                status: AgentRosterStatus::Working,
-                harness_override: None,
-                last_pane: Some("pane_1".into()),
-                last_seen_at: None,
-            }],
+        "exact-instance".into(),
+        HarnessSwitchStep::Replace,
+        Err(ClientShellEndpointError {
+            code: Some("source_has_draft".into()),
+            message: "Save the draft first; original unchanged".into(),
         }),
     );
     assert!(actions.is_empty());
     assert!(state.live_harness_switch.is_none());
-    assert!(state
-        .endpoint_error
-        .as_deref()
-        .is_some_and(|error| error.contains("working")));
+    assert!(state.endpoint_error.as_deref().unwrap().contains("draft"));
 }
 
 #[test]
-fn portable_handoff_keeps_original_until_new_agent_accepts_context() {
-    use crate::api::schema::*;
-    let mut projected = snapshot();
-    projected.agents.push(ClientShellAgent {
-        pane_id: "pane_1".into(),
-        workspace_id: "ws_1".into(),
-        tab_id: "tab_1".into(),
-        name: Some("reviewer".into()),
-        display_agent: None,
-        agent: Some("pi".into()),
-        title: None,
-        terminal_title: None,
-        terminal_title_stripped: None,
-        agent_status: AgentStatus::Idle,
-        state_change_seq: 1,
-        state_labels: Vec::new(),
-        tokens: Vec::new(),
-        focused: true,
-    });
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
-    state.set_snapshot(Box::new(projected));
-    state.set_pane_surface(surface());
-    state.harness_integrations = vec![harness_integration_fixture("droid", true)];
-    let mut started = ClientShellInput::default();
-    state.begin_live_harness_switch("reviewer:1".into(), Some("droid".into()), &mut started);
-    assert_eq!(started.actions.len(), 1);
-    let roster = ResponseResult::AgentRosterList {
-        entries: vec![AgentRosterEntryInfo {
-            instance_id: "reviewer:1".into(),
-            profile_id: "reviewer".into(),
-            role: "reviewer".into(),
-            replica_suffix: String::new(),
-            display_name: "reviewer".into(),
-            status: AgentRosterStatus::Active,
-            harness_override: None,
-            last_pane: Some("pane_1".into()),
-            last_seen_at: None,
-        }],
-    };
-    let (_, context) = state.handle_live_harness_switch_result(
-        "reviewer:1".into(),
-        HarnessSwitchStep::Roster,
-        Ok(roster),
-    );
-    let [ClientShellAction::Endpoint { request, .. }] = context.as_slice() else {
-        panic!("saved profile context read")
-    };
-    assert!(
-        matches!(&request.method, Method::AgentHarnessContext(AgentHarnessContextParams { instance_id }) if instance_id == "reviewer:1")
-    );
-    let progress = state.compose(120, 30).unwrap();
-    assert!(progress
-        .cells
-        .iter()
-        .map(|cell| cell.symbol.as_str())
-        .collect::<String>()
-        .contains("Swit"));
-    let (_, read) = state.handle_live_harness_switch_result(
-        "reviewer:1".into(),
-        HarnessSwitchStep::Context,
-        Ok(ResponseResult::AgentHarnessContext {
-            harness: "pi".into(),
-            documents: [("AGENTS.md".into(), "Saved directions".into())]
-                .into_iter()
-                .collect(),
-        }),
-    );
-    let [ClientShellAction::Endpoint { request, .. }] = read.as_slice() else {
-        panic!("bounded transcript read")
-    };
-    assert!(
-        matches!(&request.method, Method::PaneRead(PaneReadParams { pane_id, lines: Some(200), .. }) if pane_id == "pane_1")
-    );
-    let (_, spawn) = state.handle_live_harness_switch_result(
-        "reviewer:1".into(),
-        HarnessSwitchStep::Read,
-        Ok(ResponseResult::PaneRead {
-            read: PaneReadResult {
-                pane_id: "pane_1".into(),
-                workspace_id: "ws_1".into(),
-                tab_id: "tab_1".into(),
-                source: ReadSource::Recent,
-                format: ReadFormat::Text,
-                text: "prior work and instructions".into(),
-                revision: 1,
-                truncated: false,
-            },
-        }),
-    );
-    let [ClientShellAction::Endpoint { request, .. }] = spawn.as_slice() else {
-        panic!("new harness spawn")
-    };
-    let Method::AgentSpawn(params) = &request.method else {
-        panic!("agent spawn")
-    };
-    assert_eq!(params.kind.as_deref(), Some("droid"));
-    assert_eq!(params.role, "reviewer");
-    assert_eq!(params.tab_id.as_deref(), Some("tab_1"));
-    assert_eq!(params.cwd_mode, "agent");
-    let agent: AgentInfo = serde_json::from_value(serde_json::json!({
-        "terminal_id":"term_new", "name":"reviewer-replica-1", "agent":"droid",
-        "agent_status":"idle", "workspace_id":"ws_1", "tab_id":"tab_1", "pane_id":"pane_new",
-        "focused":true, "revision":2, "interactive_ready":true
-    }))
-    .unwrap();
-    let (_, ready) = state.handle_live_harness_switch_result(
-        "reviewer:1".into(),
-        HarnessSwitchStep::Spawn,
-        Ok(ResponseResult::AgentSpawned {
-            spawned: SpawnedAgentInfo {
-                agent: agent.clone(),
-                argv: vec!["droid".into()],
-                name: "reviewer-replica-1".into(),
-                pane_id: "pane_new".into(),
-                split: false,
-            },
-        }),
-    );
-    assert!(
-        matches!(&ready[0], ClientShellAction::Endpoint { request, .. } if matches!(request.method, Method::AgentRosterList(_)))
-    );
-    let (_, ready) = state.handle_live_harness_switch_result(
-        "reviewer:1".into(),
-        HarnessSwitchStep::NewRoster,
-        Ok(ResponseResult::AgentRosterList {
-            entries: vec![AgentRosterEntryInfo {
-                instance_id: "new:2".into(),
-                profile_id: "reviewer".into(),
-                role: "reviewer".into(),
-                replica_suffix: "-replica-1".into(),
-                display_name: "reviewer-replica-1".into(),
-                status: AgentRosterStatus::Idle,
-                harness_override: None,
-                last_pane: Some("pane_new".into()),
-                last_seen_at: None,
-            }],
-        }),
-    );
-    assert!(
-        matches!(&ready[0], ClientShellAction::Endpoint { request, .. } if matches!(request.method, Method::AgentReadyWait(_)))
-    );
-    let (_, prompt) = state.handle_live_harness_switch_result(
-        "reviewer:1".into(),
-        HarnessSwitchStep::Ready,
-        Ok(ResponseResult::AgentInfo {
-            agent: agent.clone(),
-        }),
-    );
-    let [ClientShellAction::Endpoint { request, .. }] = prompt.as_slice() else {
-        panic!("portable prompt")
-    };
-    let Method::AgentHarnessPrompt(params) = &request.method else {
-        panic!("exact native prompt")
-    };
-    assert_eq!(params.instance_id, "new:2");
-    assert_eq!(params.pane_id, "pane_new");
-    assert_eq!(params.harness, "droid");
-    assert!(params.text.contains("prior work and instructions"));
-    assert!(params.text.contains("Saved directions"));
-    assert!(params.text.contains("not a complete native session"));
-    let failure = ClientShellEndpointError {
-        code: Some("agent_prompt_failed".into()),
-        message: "target refused context".into(),
-    };
-    let (_, after_failure) = state.handle_live_harness_switch_result(
-        "reviewer:1".into(),
-        HarnessSwitchStep::Prompt,
-        Err(failure),
-    );
-    assert!(after_failure.is_empty());
-    assert!(state.live_harness_switch.is_none());
-    assert!(state
-        .endpoint_error
-        .as_deref()
-        .is_some_and(|error| error.contains("Original session remains available")));
-}
-
-#[test]
-fn switching_back_reuses_an_existing_native_session_and_carries_recent_context() {
-    check_harness_return_candidate(true, false);
-}
-
-#[test]
-fn switching_harness_does_not_reuse_an_unrelated_sibling() {
-    check_harness_return_candidate(false, false);
-}
-
-#[test]
-fn profile_harness_alias_reuses_its_recorded_previous_session() {
-    check_harness_return_candidate(true, true);
-}
-
-fn check_harness_return_candidate(linked: bool, profile_alias: bool) {
-    use crate::api::schema::*;
-    let mut projected = snapshot();
-    for (pane_id, tab_id, name, harness) in [
-        ("pane_1", "tab_1", "reviewer-replica-1", "droid"),
-        ("pane_old", "tab_2", "reviewer", "pi"),
-    ] {
-        projected.agents.push(ClientShellAgent {
-            pane_id: pane_id.into(),
-            workspace_id: "ws_1".into(),
-            tab_id: tab_id.into(),
-            name: Some(name.into()),
-            display_agent: None,
-            agent: Some(harness.into()),
-            title: None,
-            terminal_title: None,
-            terminal_title_stripped: None,
-            agent_status: AgentStatus::Idle,
-            state_change_seq: 2,
-            state_labels: Vec::new(),
-            tokens: Vec::new(),
-            focused: pane_id == "pane_1",
-        });
-    }
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
-    state.set_snapshot(Box::new(projected));
-    state.set_pane_surface(surface());
-    state.harness_integrations = vec![harness_integration_fixture("pi", true)];
-    state.begin_live_harness_switch(
-        "new:2".into(),
-        if profile_alias {
-            None
-        } else {
-            Some("pi".into())
-        },
-        &mut ClientShellInput::default(),
-    );
-    let (_, _) = state.handle_live_harness_switch_result(
-        "new:2".into(),
-        HarnessSwitchStep::History,
-        Ok(ResponseResult::AgentHarnessHistory {
-            instance_ids: if linked {
-                vec!["old:1".into()]
-            } else {
-                Vec::new()
-            },
-        }),
-    );
-    let roster = ResponseResult::AgentRosterList {
-        entries: vec![
-            AgentRosterEntryInfo {
-                instance_id: "new:2".into(),
-                profile_id: "reviewer".into(),
-                role: "reviewer".into(),
-                replica_suffix: "-replica-1".into(),
-                display_name: "reviewer-replica-1".into(),
-                status: AgentRosterStatus::Idle,
-                harness_override: Some("droid".into()),
-                last_pane: Some("pane_1".into()),
-                last_seen_at: None,
-            },
-            AgentRosterEntryInfo {
-                instance_id: "old:1".into(),
-                profile_id: "reviewer".into(),
-                role: "reviewer".into(),
-                replica_suffix: String::new(),
-                display_name: "reviewer".into(),
-                status: AgentRosterStatus::Idle,
-                harness_override: None,
-                last_pane: Some("pane_old".into()),
-                last_seen_at: None,
-            },
-        ],
-    };
-    let (_, context) = state.handle_live_harness_switch_result(
-        "new:2".into(),
-        HarnessSwitchStep::Roster,
-        Ok(roster.clone()),
-    );
-    assert!(
-        matches!(&context[0], ClientShellAction::Endpoint { request, .. } if matches!(request.method, Method::AgentHarnessContext(_)))
-    );
-    let (_, read) = state.handle_live_harness_switch_result(
-        "new:2".into(),
-        HarnessSwitchStep::Context,
-        Ok(ResponseResult::AgentHarnessContext {
-            harness: "pi".into(),
-            documents: Default::default(),
-        }),
-    );
-    let (_, read) = if profile_alias {
+fn same_pane_switch_requires_the_new_server_method_and_preserves_profile_default() {
+    for target in [None, Some("codex".to_string())] {
+        let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+        state.set_snapshot(Box::new(snapshot()));
+        state.set_pane_surface(surface());
+        state.harness_integrations = vec![harness_integration_fixture("codex", true)];
+        state.set_endpoint_methods(Some(vec![
+            "agent.spawn".into(),
+            "agent.harness.commit".into(),
+        ]));
+        let mut input = ClientShellInput::default();
+        state.begin_live_harness_switch("exact-instance".into(), target.clone(), &mut input);
+        assert!(input.actions.is_empty());
+        assert!(state
+            .endpoint_error
+            .as_deref()
+            .unwrap()
+            .contains("agent.harness.replace"));
+        state.handle_input_bytes(b"continue-original-session");
         assert!(
-            matches!(&read[0], ClientShellAction::Endpoint { request, .. } if matches!(request.method, Method::AgentRosterList(_)))
+            state
+                .visible_endpoint_notice
+                .as_ref()
+                .is_some_and(|notice| notice.body.contains("agent.harness.replace")),
+            "typing must not dismiss the runtime-upgrade notice"
         );
-        state.handle_live_harness_switch_result(
-            "new:2".into(),
-            HarnessSwitchStep::Roster,
-            Ok(roster),
-        );
-        state.handle_live_harness_switch_result(
-            "new:2".into(),
-            HarnessSwitchStep::Context,
-            Ok(ResponseResult::AgentHarnessContext {
-                harness: "pi".into(),
-                documents: Default::default(),
-            }),
-        )
-    } else {
-        (false, read)
-    };
-    assert!(
-        matches!(&read[0], ClientShellAction::Endpoint { request, .. } if matches!(request.method, Method::PaneRead(_)))
-    );
-    let (_, ready) = state.handle_live_harness_switch_result(
-        "new:2".into(),
-        HarnessSwitchStep::Read,
-        Ok(ResponseResult::PaneRead {
-            read: PaneReadResult {
-                pane_id: "pane_1".into(),
-                workspace_id: "ws_1".into(),
-                tab_id: "tab_1".into(),
-                source: ReadSource::Recent,
-                format: ReadFormat::Text,
-                text: "new work in Droid".into(),
-                revision: 3,
-                truncated: false,
-            },
-        }),
-    );
-    let [ClientShellAction::Endpoint { request, .. }] = ready.as_slice() else {
-        panic!("reused native session readiness")
-    };
-    if linked {
+        state.set_endpoint_methods(Some(vec!["agent.harness.replace".into()]));
+        state.begin_live_harness_switch("exact-instance".into(), target.clone(), &mut input);
+        let [ClientShellAction::Endpoint { request, .. }] = input.actions.as_slice() else {
+            panic!("one request");
+        };
         assert!(
-            matches!(&request.method, Method::AgentReadyWait(params) if params.target == "pane_old")
-        );
-    } else {
-        assert!(
-            matches!(&request.method, Method::AgentSpawn(_)),
-            "an unrelated sibling must keep its conversation"
+            matches!(&request.method, crate::api::schema::Method::AgentHarnessReplace(params) if params.harness == target)
         );
     }
-    assert_eq!(
-        state.live_harness_switch.as_ref().unwrap().reuse_existing,
-        linked
-    );
-}
-
-#[test]
-fn portable_handoff_archives_exact_source_only_after_context_delivery_and_override() {
-    use crate::api::schema::*;
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
-    state.set_snapshot(Box::new(snapshot()));
-    state.set_pane_surface(surface());
-    state.live_harness_switch = Some(LiveHarnessSwitch {
-        instance_id: "old:1".into(),
-        target: Some("droid".into()),
-        endpoint_id: ClientEndpointId::Local,
-        role: Some("reviewer".into()),
-        old_pane: Some("pane_1".into()),
-        tab_id: Some("tab_1".into()),
-        previous_harness: Some("pi".into()),
-        transcript: Some("prior work".into()),
-        documents: Default::default(),
-        new_pane: Some("pane_new".into()),
-        reuse_existing: false,
-        return_instances: Vec::new(),
-        new_name: Some("reviewer-replica-1".into()),
-        target_instance_id: Some("new:2".into()),
-    });
-    let agent: AgentInfo = serde_json::from_value(serde_json::json!({
-        "terminal_id":"term_new", "name":"reviewer-replica-1", "agent":"droid",
-        "agent_status":"idle", "workspace_id":"ws_1", "tab_id":"tab_1", "pane_id":"pane_new",
-        "focused":true, "revision":2, "interactive_ready":true
-    }))
-    .unwrap();
-    let (_, set) = state.handle_live_harness_switch_result(
-        "old:1".into(),
-        HarnessSwitchStep::Prompt,
-        Ok(ResponseResult::AgentPrompted { agent }),
-    );
-    let [ClientShellAction::Endpoint { request, .. }] = set.as_slice() else {
-        panic!("exact new instance override")
-    };
-    assert!(
-        matches!(&request.method, Method::AgentHarnessSet(params) if params.instance_id == "new:2" && params.harness.as_deref() == Some("droid"))
-    );
-    let (_, archive) = state.handle_live_harness_switch_result(
-        "old:1".into(),
-        HarnessSwitchStep::Override,
-        Ok(ResponseResult::AgentHarnessSet {
-            instance_id: "new:2".into(),
-            harness_override: Some("droid".into()),
-        }),
-    );
-    let [ClientShellAction::Endpoint { request, .. }] = archive.as_slice() else {
-        panic!("archive exact original")
-    };
-    assert!(matches!(&request.method, Method::AgentHarnessCommit(params)
-        if params.source_instance_id == "old:1" && params.source_pane_id == "pane_1" && params.target_instance_id == "new:2" && params.target_pane_id == "pane_new"));
 }
 
 #[test]

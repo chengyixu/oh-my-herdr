@@ -116,6 +116,12 @@ pub enum ResponseResult {
     HarnessIntegrationSet {
         integration: HarnessIntegrationInfo,
     },
+    AgentHarnessReplaced {
+        pane: PaneInfo,
+        source_session: String,
+        target_session: String,
+        messages: usize,
+    },
     AgentHarnessCommitted {
         previous_tab: String,
         pane: PaneInfo,

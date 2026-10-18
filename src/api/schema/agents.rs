@@ -4,6 +4,15 @@ use serde::{Deserialize, Serialize};
 
 use super::common::{AgentStatus, ReadFormat, ReadSource};
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AgentHarnessReplaceParams {
+    pub instance_id: String,
+    /// Null selects the saved profile's current default integration.
+    pub harness: Option<String>,
+}
+
+pub use crate::integration::native_context::NativeContextRegistration as AgentContextRegisterParams;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentProfileEffort {

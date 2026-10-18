@@ -83,7 +83,16 @@ impl ChildExitReason {
 #[cfg(unix)]
 pub(crate) use unix_common::{
     classify_child_exit, poll_fd_readable, read_fd, shared_ssh_control_path,
+    validate_private_context_endpoint,
 };
+
+#[cfg(not(unix))]
+pub(crate) fn validate_private_context_endpoint(_path: &std::path::Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "native context transport is not qualified on this platform",
+    ))
+}
 
 #[cfg(not(any(unix, windows)))]
 pub(crate) fn classify_child_exit(_status: &portable_pty::ExitStatus) -> ChildExitReason {
