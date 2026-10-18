@@ -201,7 +201,7 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
         return None;
     }
 
-    let argv = match (source, agent, session_ref.kind) {
+    let mut argv = match (source, agent, session_ref.kind) {
         ("herdr:claude", "claude", AgentSessionRefKind::Id) => {
             vec![
                 "claude".into(),
@@ -311,6 +311,17 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
         _ => return None,
     };
 
+    // Native launch policy also applies on cold restore. In particular Codex's
+    // shared daemon cannot own one pane's environment or session identity.
+    if let Some(kind) = crate::detect::parse_agent_label(agent) {
+        argv.splice(
+            1..1,
+            kind.harness()
+                .launch_args
+                .iter()
+                .map(|arg| (*arg).to_string()),
+        );
+    }
     Some(AgentResumePlan {
         agent: agent.to_string(),
         argv,
@@ -472,7 +483,7 @@ mod tests {
             )
             .unwrap()
             .argv,
-            vec!["codex", "resume", "codex-session"]
+            vec!["codex", "--no-daemon", "resume", "codex-session"]
         );
         assert_eq!(
             plan(
@@ -843,7 +854,7 @@ mod tests {
     fn ids_are_data_not_shell_text() {
         let id = "abc; rm -rf /";
         let codex_plan = plan("herdr:codex", "codex", &AgentSessionRef::id(id).unwrap()).unwrap();
-        assert_eq!(codex_plan.argv, vec!["codex", "resume", id]);
+        assert_eq!(codex_plan.argv, vec!["codex", "--no-daemon", "resume", id]);
 
         let copilot_plan = plan(
             "herdr:copilot",

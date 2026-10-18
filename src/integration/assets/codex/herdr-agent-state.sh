@@ -3,7 +3,7 @@
 # managed by herdr; reinstalling or updating the integration overwrites this file.
 # add custom hooks beside this file instead of editing it.
 # HERDR_INTEGRATION_ID=codex
-# HERDR_INTEGRATION_VERSION=8
+# HERDR_INTEGRATION_VERSION=9
 
 set -eu
 
@@ -56,9 +56,8 @@ request_id = f"{source}:{int(time.time() * 1000)}:{random.randrange(1_000_000):0
 report_seq = time.time_ns()
 session_id = hook_input.get("session_id")
 agent_session_id = session_id if isinstance(session_id, str) and session_id else None
-transcript_path = hook_input.get("transcript_path")
-if not isinstance(transcript_path, str) or not transcript_path.strip():
-    raise SystemExit(0)
+# A persisted session id is sufficient for native resume. Current Codex can
+# disable transcript storage and legitimately supplies a null transcript path.
 inherited_session_id = os.environ.get("CODEX_THREAD_ID")
 if inherited_session_id and inherited_session_id != agent_session_id:
     raise SystemExit(0)

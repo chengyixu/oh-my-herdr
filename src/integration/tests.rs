@@ -1304,10 +1304,89 @@ fn codex_v2_integration_status_is_outdated() {
 
     assert_eq!(codex.path, hook_path);
     assert_eq!(codex.installed_version, Some(2));
-    assert_eq!(codex.expected_version, 8);
+    assert_eq!(codex.expected_version, CODEX_INTEGRATION_VERSION);
     assert_eq!(codex.state, IntegrationStatusKind::Outdated);
 
     std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn codex_current_hook_without_registration_is_outdated() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let dir = home.join(".codex");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join(CODEX_HOOK_INSTALL_NAME), CODEX_HOOK_ASSET).unwrap();
+    fs::write(dir.join("config.toml"), "model = \"unchanged\"\n").unwrap();
+    std::env::set_var("HOME", &home);
+    let status = integration_status_at(
+        crate::api::schema::IntegrationTarget::Codex,
+        dir.join(CODEX_HOOK_INSTALL_NAME),
+        CODEX_INTEGRATION_VERSION,
+    );
+    assert_eq!(
+        status.state,
+        IntegrationStatusKind::Outdated,
+        "a script which Codex never calls cannot capture a resumable session"
+    );
+    install_codex().unwrap();
+    let status = integration_status_at(
+        crate::api::schema::IntegrationTarget::Codex,
+        dir.join(CODEX_HOOK_INSTALL_NAME),
+        CODEX_INTEGRATION_VERSION,
+    );
+    assert_eq!(status.state, IntegrationStatusKind::Current);
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[cfg(unix)]
+#[test]
+fn codex_session_hook_reports_identity_when_native_transcript_is_null() {
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixListener;
+    use std::process::{Command, Stdio};
+    let base = std::path::PathBuf::from(format!("/tmp/ohcodex-hook-{}", std::process::id()));
+    fs::create_dir_all(&base).unwrap();
+    let socket = base.join("hook.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let script = base.join("hook.sh");
+    fs::write(&script, CODEX_HOOK_ASSET).unwrap();
+    let mut child = Command::new("sh")
+        .arg(script)
+        .arg("session")
+        .env("HERDR_ENV", "1")
+        .env("HERDR_PANE_ID", "w1:p1")
+        .env("HERDR_SOCKET_PATH", &socket)
+        .env_remove("CODEX_THREAD_ID")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(br#"{"hook_event_name":"SessionStart","session_id":"native-id","transcript_path":null,"source":"startup"}"#).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    let mut stream = loop {
+        if let Ok((stream, _)) = listener.accept() {
+            break stream;
+        }
+        if child.try_wait().unwrap().is_some() || std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            panic!("a valid native session id must be reported even when Codex disables transcript storage");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(1)))
+        .unwrap();
+    let mut bytes = [0; 4096];
+    let count = stream.read(&mut bytes).unwrap();
+    let report: Value = serde_json::from_slice(&bytes[..count]).unwrap();
+    assert_eq!(report["params"]["agent_session_id"], "native-id");
+    stream.write_all(b"{}\n").unwrap();
+    assert!(child.wait().unwrap().success());
     let _ = fs::remove_dir_all(base);
 }
 

@@ -478,6 +478,12 @@ pub(crate) fn integration_status_at(
     {
         state = super::IntegrationStatusKind::Outdated;
     }
+    if target == crate::api::schema::IntegrationTarget::Codex
+        && state == super::IntegrationStatusKind::Current
+        && !codex_session_hook_is_registered(&path)
+    {
+        state = super::IntegrationStatusKind::Outdated;
+    }
     if target == crate::api::schema::IntegrationTarget::Opencode
         && state == super::IntegrationStatusKind::Current
         && !opencode_tui_integration_is_valid(&path, expected_version)
@@ -492,6 +498,36 @@ pub(crate) fn integration_status_at(
         installed_version,
         expected_version,
     }
+}
+
+fn codex_session_hook_is_registered(script: &std::path::Path) -> bool {
+    let Some(dir) = script.parent() else {
+        return false;
+    };
+    let Ok(content) = std::fs::read_to_string(dir.join("hooks.json")) else {
+        return false;
+    };
+    let Ok(config) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return false;
+    };
+    config
+        .pointer("/hooks/SessionStart")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|groups| {
+            groups
+                .iter()
+                .filter_map(|group| group.get("hooks").and_then(serde_json::Value::as_array))
+                .flatten()
+                .any(|hook| {
+                    hook.get("type").and_then(serde_json::Value::as_str) == Some("command")
+                        && hook
+                            .get("command")
+                            .and_then(serde_json::Value::as_str)
+                            .is_some_and(|command| {
+                                command == super::command::hook_command(script, Some("session"))
+                            })
+                })
+        })
 }
 
 /// Letta is intentionally kept out of the frozen client endpoint

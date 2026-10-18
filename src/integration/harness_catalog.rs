@@ -91,7 +91,7 @@ macro_rules! terminal_harnesses {
 use Instructions::{AppendFiles, AppendText, Codex, Native, Prompt};
 use IntegrationTarget as Hook;
 terminal_harnesses! {
-    Codex => ("codex", "Codex", "codex", &[], Codex, CODEX, Some(Hook::Codex), Some("npm install -g @openai/codex")),
+    Codex => ("codex", "Codex", "codex", &["--no-daemon"], Codex, CODEX, Some(Hook::Codex), Some("npm install -g @openai/codex")),
     Pi => ("pi", "Pi", "pi", &[], AppendFiles("--append-system-prompt"), PI, Some(Hook::Pi), Some("npm install -g @earendil-works/pi-coding-agent")),
     Claude => ("claude", "Claude Code", "claude", &[], AppendFiles("--append-system-prompt-file"), CLAUDE, Some(Hook::Claude), Some("npm install -g @anthropic-ai/claude-code")),
     Omp => ("omp", "Oh My Pi", "omp", &[], AppendFiles("--append-system-prompt"), MODEL, Some(Hook::Omp), Some("npm install -g @oh-my-pi/pi-coding-agent")),
@@ -184,6 +184,19 @@ mod tests {
             assert!(find(excluded).is_none());
         }
     }
+    #[test]
+    fn codex_pane_launch_and_resume_use_process_local_native_runtime() {
+        let harness = find("codex").unwrap();
+        assert!(harness.launch_args.contains(&"--no-daemon"));
+        let plan = crate::agent_resume::plan(
+            "herdr:codex",
+            "codex",
+            &crate::agent_resume::AgentSessionRef::id("native-id").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(plan.argv, ["codex", "--no-daemon", "resume", "native-id"]);
+    }
+
     #[test]
     fn explicit_deactivation_wins_over_installed_hooks_and_saved_profiles() {
         let h = find("opencode").unwrap();
