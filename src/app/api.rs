@@ -1152,6 +1152,9 @@ impl App {
             Method::AgentContextRegister(params) => {
                 return self.handle_agent_context_register(request.id, params)
             }
+            Method::AgentContextControl(params) => {
+                return self.handle_agent_context_control(request.id, params)
+            }
             Method::AgentHarnessCommit(params) => {
                 return self.handle_agent_harness_commit(request.id, params)
             }

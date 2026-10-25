@@ -981,8 +981,11 @@ fn reaped_pane_leader_terminates_captured_session_descendants() {
     let pane_id = workspace["result"]["root_pane"]["pane_id"]
         .as_str()
         .expect("workspace creation should return a root pane ID");
+    let descendant_pid_pending = base.join("descendant.pid.pending");
     let command = format!(
-        "exec /bin/sh -c 'trap \"\" HUP; sleep 60 & descendant=$!; printf \"%s\\n\" \"$descendant\" > {}; while [ ! -e {} ]; do sleep 0.05; done'",
+        "exec /bin/sh -c 'trap \"\" HUP; sleep 60 & descendant=$!; printf \"%s\\n\" \"$descendant\" > {}; sleep 0.05; mv -f {} {}; while [ ! -e {} ]; do sleep 0.05; done'",
+        descendant_pid_pending.display(),
+        descendant_pid_pending.display(),
         descendant_pid_file.display(),
         release_file.display(),
     );

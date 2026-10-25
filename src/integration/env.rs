@@ -32,11 +32,12 @@ pub(crate) fn apply_pane_base_env(cmd: &mut CommandBuilder) {
     }
 }
 
+pub(crate) fn pi_dir() -> io::Result<PathBuf> {
+    config_dir_from_env_or_home(PI_CODING_AGENT_DIR_ENV_VAR, &[".pi", "agent"])
+}
+
 pub(crate) fn pi_extension_dir() -> io::Result<PathBuf> {
-    Ok(
-        config_dir_from_env_or_home(PI_CODING_AGENT_DIR_ENV_VAR, &[".pi", "agent"])?
-            .join("extensions"),
-    )
+    Ok(pi_dir()?.join("extensions"))
 }
 
 pub(crate) fn omp_extension_dir() -> io::Result<PathBuf> {
@@ -124,6 +125,9 @@ pub(crate) fn expand_tilde_path(path: PathBuf) -> io::Result<PathBuf> {
 }
 
 pub(crate) fn opencode_dir() -> io::Result<PathBuf> {
+    if let Some(value) = std::env::var_os("XDG_CONFIG_HOME").filter(|value| !value.is_empty()) {
+        return expand_tilde_path(PathBuf::from(value)).map(|path| path.join("opencode"));
+    }
     Ok(home_dir()?.join(".config/opencode"))
 }
 
@@ -136,6 +140,9 @@ pub(crate) fn opencode_state_dir() -> io::Result<PathBuf> {
 }
 
 pub(crate) fn kilo_dir() -> io::Result<PathBuf> {
+    if let Some(value) = std::env::var_os("XDG_CONFIG_HOME").filter(|value| !value.is_empty()) {
+        return expand_tilde_path(PathBuf::from(value)).map(|path| path.join("kilo"));
+    }
     Ok(home_dir()?.join(".config/kilo"))
 }
 
@@ -264,6 +271,20 @@ pub(crate) fn integration_env_lock() -> IntegrationEnvLock {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opencode_dir_honors_xdg_config_home() {
+        let _lock = integration_env_lock();
+        let original = std::env::var_os("XDG_CONFIG_HOME");
+        let xdg = std::env::temp_dir().join("herdr-xdg-config");
+        std::env::set_var("XDG_CONFIG_HOME", &xdg);
+        assert_eq!(opencode_dir().unwrap(), xdg.join("opencode"));
+        assert_eq!(kilo_dir().unwrap(), xdg.join("kilo"));
+        match original {
+            Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+    }
 
     #[test]
     fn opencode_state_dir_defaults_to_local_state() {

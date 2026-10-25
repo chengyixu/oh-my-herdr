@@ -8,6 +8,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+pub(crate) mod claude;
+pub(crate) mod claude_source;
+pub(crate) mod codex_source;
+pub(crate) mod grok;
+pub(crate) mod opencode_family;
+pub(crate) mod pi;
 mod storage;
 pub(crate) use storage::ImportedHistory;
 
@@ -44,6 +50,126 @@ pub(crate) fn read_pi_history(path: &Path, leaf: Option<&str>) -> io::Result<Nat
         }
     };
     decode_pi_history(bytes, leaf)
+}
+
+pub(crate) fn tool_name(block: &Value) -> io::Result<String> {
+    let name = block
+        .get("name")
+        .or_else(|| block.get("toolName"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid("native tool name is missing"))?;
+    let namespace = block
+        .get("namespace")
+        .and_then(Value::as_str)
+        .filter(|ns| !ns.is_empty());
+    let mapped = match namespace {
+        Some(ns) => format!("{ns}__{name}"),
+        None => name.replace('.', "__"),
+    };
+    let mut sanitized: String = mapped
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() || ch == '_' { ch } else { '_' })
+        .collect();
+    if sanitized.len() > 64 {
+        sanitized.truncate(44);
+        let hash = format!("{:x}", Sha256::digest(mapped.as_bytes()));
+        sanitized.push_str(&format!("_{}", &hash[..16]));
+    }
+    if sanitized.is_empty() {
+        return Err(invalid("source tool name is empty"));
+    }
+    Ok(sanitized)
+}
+
+#[allow(dead_code)]
+pub(crate) fn validate_native_tool_names(messages: &[Value]) -> io::Result<()> {
+    let mut names = HashMap::<String, (Value, Value)>::new();
+    for message in messages {
+        for block in message_blocks(message)? {
+            if block.get("type").and_then(Value::as_str) == Some("toolCall") {
+                let name = tool_name(&block)?;
+                let prev = names.insert(
+                    name,
+                    (
+                        block.get("namespace").cloned().unwrap_or(Value::Null),
+                        block.get("name").cloned().unwrap_or(Value::Null),
+                    ),
+                );
+                if let Some((prev_ns, prev_name)) = prev {
+                    if prev_ns != block.get("namespace").cloned().unwrap_or(Value::Null)
+                        || prev_name != block.get("name").cloned().unwrap_or(Value::Null)
+                    {
+                        return Err(invalid(
+                            "source tool namespace mapping is ambiguous; source retained",
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[allow(dead_code)]
+pub(crate) fn validate_tool_pairs(messages: &[Value]) -> io::Result<()> {
+    let mut pending = HashSet::<String>::new();
+    for message in messages {
+        for block in message_blocks(message)? {
+            if block.get("type").and_then(Value::as_str) == Some("toolCall") {
+                let id = block
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| invalid("native tool call identity missing"))?;
+                if !pending.insert(id.to_owned()) {
+                    return Err(invalid("duplicate pending source tool call identity"));
+                }
+            }
+        }
+        if message.get("role").and_then(Value::as_str) == Some("toolResult") {
+            let id = message
+                .get("toolCallId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| invalid("native tool result identity is missing"))?;
+            if !pending.remove(id) {
+                return Err(invalid("source tool result has no matching call"));
+            }
+        }
+    }
+    if !pending.is_empty() {
+        return Err(invalid("source tool calls are unfinished"));
+    }
+    Ok(())
+}
+
+pub(crate) fn historical_source_configuration(history: &NativeHistory, _target: &str) -> io::Result<Option<Value>> {
+    let Some(context) = &history.source_context else {
+        return Ok(None);
+    };
+    let serialized = serde_json::to_string(context)?;
+    let content = format!(
+        "Historical source configuration. The current native harness's instructions and available tools remain authoritative. Historical tool records describe past actions and must not be replayed as new actions.\n\nRecorded source-harness instructions and tool definitions (historical): {serialized}"
+    );
+    Ok(Some(json!({
+        "role": "user",
+        "content": [{ "type": "text", "text": content }]
+    })))
+}
+
+pub(crate) fn read_native_snapshot(
+    snapshot: &super::native_context::NativeContextSnapshot,
+) -> io::Result<NativeHistory> {
+    match snapshot.format.as_str() {
+        "pi.session.v3" => read_pi_snapshot(snapshot),
+        "codex.rollout.v163" => {
+            let path = PathBuf::from(&snapshot.session_path);
+            codex_source::read_legacy_file(&path, &snapshot.session_id)
+        }
+        "claude.transcript.v2.1.302" => {
+            let path = PathBuf::from(&snapshot.session_path);
+            claude_source::snapshot(&path, &snapshot.session_id, &snapshot.cwd)
+        }
+        _ => Err(invalid("native source format has not been qualified")),
+    }
 }
 
 pub(crate) fn read_pi_snapshot(
@@ -218,7 +344,7 @@ fn decode_pi_history(bytes: Vec<u8>, leaf: Option<&str>) -> io::Result<NativeHis
     })
 }
 
-fn message_blocks(message: &Value) -> io::Result<Vec<Value>> {
+pub(crate) fn message_blocks(message: &Value) -> io::Result<Vec<Value>> {
     match message.get("content") {
         Some(Value::String(text)) => Ok(vec![json!({"type":"text","text":text})]),
         Some(Value::Array(blocks)) => Ok(blocks.clone()),
@@ -250,7 +376,7 @@ fn validate_pi_message(message: &Value) -> io::Result<()> {
     Ok(())
 }
 
-fn image_uri(block: &Value) -> io::Result<String> {
+pub(crate) fn image_uri(block: &Value) -> io::Result<String> {
     let mime = block["mimeType"]
         .as_str()
         .filter(|mime| mime.starts_with("image/"))
@@ -1075,5 +1201,44 @@ mod tests {
         assert!(!serde_json::to_string(&branch.messages)
             .unwrap()
             .contains("unrelated branch"));
+    }
+
+    #[test]
+    fn tool_namespace_mapping_keeps_identity_and_rejects_alias_collisions() {
+        let valid_tool = json!({
+            "type": "toolCall",
+            "name": "exec_command",
+            "namespace": "functions",
+            "arguments": {}
+        });
+        assert_eq!(tool_name(&valid_tool).unwrap(), "functions__exec_command");
+
+        let dotted_tool = json!({
+            "type": "toolCall",
+            "name": "functions.exec_command",
+            "arguments": {}
+        });
+        assert_eq!(tool_name(&dotted_tool).unwrap(), "functions__exec_command");
+
+        let messages_consistent = vec![
+            json!({
+                "role": "assistant",
+                "content": [valid_tool.clone()]
+            }),
+            json!({
+                "role": "toolResult",
+                "toolCallId": "1",
+                "content": "ok"
+            }),
+        ];
+        assert!(validate_native_tool_names(&messages_consistent).is_ok());
+
+        let messages_collision = vec![
+            json!({
+                "role": "assistant",
+                "content": [valid_tool, dotted_tool]
+            }),
+        ];
+        assert!(validate_native_tool_names(&messages_collision).is_err());
     }
 }

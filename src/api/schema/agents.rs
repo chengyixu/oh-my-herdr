@@ -15,6 +15,20 @@ pub use crate::integration::native_context::NativeContextRegistration as AgentCo
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
+pub enum AgentContextControlAction {
+    Inspect,
+    OpenEditor,
+    Exit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AgentContextControlParams {
+    pub context: crate::integration::native_context::NativeContextRegistration,
+    pub action: AgentContextControlAction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum AgentProfileEffort {
     Low,
     Medium,

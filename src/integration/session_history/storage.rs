@@ -1,7 +1,7 @@
 //! One atomic publication/recovery contract for all native target adapters.
 use super::*;
 
-fn uuid_from_seed(seed: &str) -> String {
+pub(crate) fn uuid_from_seed(seed: &str) -> String {
     let hex = format!("{:x}", Sha256::digest(seed.as_bytes()));
     format!(
         "{}-{}-4{}-a{}-{}",
@@ -13,7 +13,7 @@ fn uuid_from_seed(seed: &str) -> String {
     )
 }
 
-pub(super) fn entry_identity(session_id: &str, index: usize) -> String {
+pub(crate) fn entry_identity(session_id: &str, index: usize) -> String {
     uuid_from_seed(&format!("native-entry:{session_id}:{index}"))
 }
 

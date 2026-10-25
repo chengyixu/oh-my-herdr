@@ -143,6 +143,8 @@ pub enum Method {
     AgentRosterList(EmptyParams),
     #[serde(rename = "agent.context.register")]
     AgentContextRegister(AgentContextRegisterParams),
+    #[serde(rename = "agent.context.control")]
+    AgentContextControl(AgentContextControlParams),
     #[serde(rename = "agent.harness.commit")]
     AgentHarnessCommit(AgentHarnessCommitParams),
     #[serde(rename = "agent.harness.context")]

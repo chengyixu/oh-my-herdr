@@ -6,6 +6,7 @@ mod config_file;
 mod env;
 mod file_ops;
 pub(crate) mod harness_catalog;
+pub(crate) mod managed_source;
 mod native_acp;
 pub(crate) mod native_context;
 mod native_process;
@@ -192,7 +193,7 @@ const OPENCODE_V2_TUI_PLUGIN_ASSET: &str = include_str!("assets/opencode/tui.js"
 const OPENCODE_INTEGRATION_VERSION: u32 = 13;
 const KILO_PLUGIN_INSTALL_NAME: &str = "herdr-agent-state.js";
 const KILO_PLUGIN_ASSET: &str = include_str!("assets/kilo/herdr-agent-state.js");
-const KILO_INTEGRATION_VERSION: u32 = 4;
+const KILO_INTEGRATION_VERSION: u32 = 5;
 const HERMES_PLUGIN_INSTALL_NAME: &str = "herdr-agent-state";
 const HERMES_PLUGIN_MANIFEST_INSTALL_NAME: &str = "plugin.yaml";
 const HERMES_PLUGIN_INIT_INSTALL_NAME: &str = "__init__.py";

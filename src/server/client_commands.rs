@@ -253,7 +253,7 @@ mod tests {
         }
     }
 
-    fn endpoint_method_shape_digests() -> BTreeMap<String, String> {
+    fn method_shape_digests(methods: &[&str]) -> BTreeMap<String, String> {
         let schema = serde_json::to_value(schemars::schema_for!(crate::api::schema::Request))
             .expect("request schema");
         let definitions = schema
@@ -266,14 +266,14 @@ mod tests {
             .expect("request method branches");
         let mut digests = BTreeMap::new();
 
-        for method in CLIENT_SHELL_METHODS {
+        for method in methods {
             let branch = branches
                 .iter()
                 .find(|branch| {
                     branch
                         .pointer("/properties/method/const")
                         .and_then(serde_json::Value::as_str)
-                        == Some(method)
+                        == Some(*method)
                 })
                 .unwrap_or_else(|| panic!("missing request schema branch for {method}"));
             let mut referenced_names = BTreeSet::new();
@@ -299,6 +299,21 @@ mod tests {
         }
 
         digests
+    }
+
+    fn endpoint_method_shape_digests() -> BTreeMap<String, String> {
+        method_shape_digests(CLIENT_SHELL_METHODS)
+    }
+
+    #[test]
+    fn private_native_context_control_has_an_additive_request_contract() {
+        let expected: BTreeMap<String, String> = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/endpoint-method-shapes-ohmyherdr-v6.json"
+        )))
+        .expect("additive native control contract");
+        let actual = method_shape_digests(&["agent.context.control"]);
+        assert_eq!(actual, expected);
     }
 
     #[test]

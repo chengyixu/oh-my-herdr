@@ -28,6 +28,7 @@ mod agent_detection;
 mod cursor;
 mod input;
 mod kitty_keyboard;
+pub(crate) mod native_input;
 mod osc;
 mod state;
 mod terminal;
@@ -1368,6 +1369,7 @@ pub struct PaneRuntime {
     current_size: Cell<(u16, u16, u32, u32)>,
     last_input_at: Cell<Option<std::time::Instant>>,
     input_received: Cell<bool>,
+    native_input: Cell<native_input::NativeInputEvidence>,
     child_pid: Arc<AtomicU32>,
     reported_cwd: Arc<Mutex<Option<std::path::PathBuf>>>,
     persistence_cwd: Mutex<Option<std::path::PathBuf>>,
@@ -2554,6 +2556,7 @@ impl PaneRuntime {
                 ))
             })),
             input_received: Cell::new(has_received_input),
+            native_input: Cell::new(native_input::NativeInputEvidence::restored_unknown()),
             current_size: Cell::new((rows, cols, cell_width_px, cell_height_px)),
             child_pid,
             reported_cwd,
@@ -3159,6 +3162,7 @@ impl PaneRuntime {
             io,
             last_input_at: Cell::new(None),
             input_received: Cell::new(false),
+            native_input: Cell::new(native_input::NativeInputEvidence::default()),
             current_size: Cell::new((rows, cols, 0, 0)),
             child_pid,
             reported_cwd,
@@ -3569,11 +3573,18 @@ impl PaneRuntime {
     }
 
     pub fn try_send_bytes(&self, bytes: Bytes) -> Result<(), mpsc::error::TrySendError<Bytes>> {
+        let mut evidence = self.native_input.get();
+        evidence.raw_input(&bytes, self.bracketed_paste_enabled());
         let result = self.io.try_send_bytes(bytes);
         if result.is_ok() {
+            self.native_input.set(evidence);
             self.record_input();
         }
         result
+    }
+
+    pub fn native_input_evidence(&self) -> native_input::NativeInputEvidence {
+        self.native_input.get()
     }
 
     pub fn queue_user_input_submission(
@@ -3583,10 +3594,14 @@ impl PaneRuntime {
         delay: std::time::Duration,
         deadline: Option<std::time::Instant>,
     ) -> std::io::Result<std::sync::mpsc::Receiver<std::io::Result<()>>> {
+        let mut evidence = self.native_input.get();
+        evidence.raw_input(&text, self.bracketed_paste_enabled());
+        evidence.raw_input(&enter, false);
         let result = self
             .io
             .queue_user_input_submission(text, enter, delay, deadline);
         if result.is_ok() {
+            self.native_input.set(evidence);
             self.record_input();
         }
         result
@@ -3907,6 +3922,7 @@ impl PaneRuntime {
                 },
                 last_input_at: Cell::new(None),
                 input_received: Cell::new(false),
+                native_input: Cell::new(native_input::NativeInputEvidence::default()),
                 current_size: Cell::new((rows, cols, 0, 0)),
                 child_pid: Arc::new(AtomicU32::new(0)),
                 reported_cwd: Arc::new(Mutex::new(None)),
@@ -5081,6 +5097,7 @@ mod tests {
             },
             last_input_at: Cell::new(None),
             input_received: Cell::new(false),
+            native_input: Cell::new(native_input::NativeInputEvidence::default()),
             current_size: Cell::new((80, 24, 0, 0)),
             child_pid: Arc::new(AtomicU32::new(0)),
             reported_cwd: Arc::new(Mutex::new(None)),
@@ -5123,6 +5140,7 @@ mod tests {
             },
             last_input_at: Cell::new(None),
             input_received: Cell::new(false),
+            native_input: Cell::new(native_input::NativeInputEvidence::default()),
             current_size: Cell::new((80, 24, 0, 0)),
             child_pid: Arc::new(AtomicU32::new(0)),
             reported_cwd: Arc::new(Mutex::new(None)),

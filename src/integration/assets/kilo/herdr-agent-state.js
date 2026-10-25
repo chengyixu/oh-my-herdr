@@ -2,7 +2,7 @@
 // managed by herdr; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
 // HERDR_INTEGRATION_ID=kilo
-// HERDR_INTEGRATION_VERSION=4
+// HERDR_INTEGRATION_VERSION=5
 
 import net from "node:net";
 
@@ -102,16 +102,33 @@ function reportState(state, sessionID) {
   return request("pane.report_agent", params);
 }
 
+const nativeContextHooks = {
+  "experimental.chat.messages.transform": async (_input, output) => {
+    const first = output.messages?.[0];
+    if (!first?.parts?.some((part) => part.type === "compaction")) return;
+    // Kilo filters the durable checkpoint before this native hook. Only our
+    // empty import checkpoint is exempt from its later historical-media strip.
+    // Copy the request view; keep the durable summary and actual user parts.
+    output.messages.forEach((message, index) => {
+      const imported = message.info?.role === "assistant" && message.info.summary === true &&
+        message.info.parentID === first.info?.id &&
+        message.parts?.some((part) => part.type === "text" && part.text === "" && part.metadata?.ohmyherdrNativeCheckpoint?.version === 1);
+      if (imported) output.messages[index] = { ...message, info: { ...message.info, summary: false } };
+    });
+  },
+};
+
 export const HerdrAgentStatePlugin = async () => {
   if (
     process.env.HERDR_ENV !== "1" ||
     !process.env.HERDR_SOCKET_PATH ||
     !process.env.HERDR_PANE_ID
   ) {
-    return {};
+    return nativeContextHooks;
   }
 
   return {
+    ...nativeContextHooks,
     "chat.message": async ({ sessionID }) => {
       await reportState("working", sessionID);
     },

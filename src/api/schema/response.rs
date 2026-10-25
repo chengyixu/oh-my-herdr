@@ -110,6 +110,11 @@ pub enum ResponseResult {
     AgentRosterList {
         entries: Vec<AgentRosterEntryInfo>,
     },
+    NativeContextControl {
+        input: crate::pane::native_input::NativeInputEvidence,
+        queue_unchanged: bool,
+        output_seq: u64,
+    },
     HarnessIntegrationList {
         integrations: Vec<HarnessIntegrationInfo>,
     },

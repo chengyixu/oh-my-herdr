@@ -624,6 +624,7 @@ pub(crate) fn api_method_name(method: &Method) -> &'static str {
         Method::AgentRevive(_) => "agent.revive",
         Method::AgentRosterList(_) => "agent.roster.list",
         Method::AgentContextRegister(_) => "agent.context.register",
+        Method::AgentContextControl(_) => "agent.context.control",
         Method::AgentHarnessCommit(_) => "agent.harness.commit",
         Method::AgentHarnessContext(_) => "agent.harness.context",
         Method::AgentHarnessHistory(_) => "agent.harness.history",

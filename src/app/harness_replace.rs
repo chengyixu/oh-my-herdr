@@ -193,9 +193,110 @@ impl App {
                     "a newer context registration already owns this native process",
                 );
             }
+            let baseline = runtime.map(|r| r.native_input_evidence());
+            terminal.native_context_input_baseline = baseline;
             terminal.native_context = Some(params);
         }
         encode_success(id, ResponseResult::Ok {})
+    }
+
+    pub(crate) fn handle_agent_context_control(
+        &mut self,
+        id: String,
+        params: crate::api::schema::agents::AgentContextControlParams,
+    ) -> String {
+        let (ws, pane) = match self.parse_current_public_pane_id(&params.context.pane_id) {
+            Some(pair) => pair,
+            None => return encode_error(id, "pane_not_found", "native source pane was not found"),
+        };
+        let terminal_id = match self
+            .state
+            .workspaces
+            .get(ws)
+            .and_then(|workspace| workspace.terminal_id(pane))
+            .cloned()
+        {
+            Some(t) => t,
+            None => {
+                return encode_error(
+                    id,
+                    "pane_not_found",
+                    "native source terminal was not found",
+                )
+            }
+        };
+        let terminal = match self.state.terminals.get(&terminal_id) {
+            Some(t) => t,
+            None => {
+                return encode_error(
+                    id,
+                    "pane_not_found",
+                    "native source terminal was not found",
+                )
+            }
+        };
+        if terminal.native_context.as_ref() != Some(&params.context) {
+            return encode_error(
+                id,
+                "native_context_not_owned",
+                "the controller does not own this pane's current native context",
+            );
+        }
+        let runtime = match self.terminal_runtimes.get(&terminal_id) {
+            Some(r) => r,
+            None => {
+                return encode_error(
+                    id,
+                    "pane_not_found",
+                    "native source runtime disappeared",
+                )
+            }
+        };
+        let harness = match crate::harness::find(&params.context.agent) {
+            Some(h) => h,
+            None => return encode_error(id, "invalid_agent_kind", "unknown native integration"),
+        };
+
+        match params.action {
+            crate::api::schema::agents::AgentContextControlAction::Inspect => {
+                let baseline = terminal
+                    .native_context_input_baseline
+                    .unwrap_or_else(crate::pane::native_input::NativeInputEvidence::default);
+                let current = runtime.native_input_evidence();
+                let queue_unchanged = current.queue_proven_unchanged_since(&baseline);
+                let output_seq = runtime.content_seq();
+                encode_success(
+                    id,
+                    crate::api::schema::response::ResponseResult::NativeContextControl {
+                        input: current,
+                        queue_unchanged,
+                        output_seq,
+                    },
+                )
+            }
+            crate::api::schema::agents::AgentContextControlAction::OpenEditor => {
+                let Some(controls) = harness.native_editor_controls() else {
+                    return encode_error(
+                        id,
+                        "unsupported_native_control",
+                        "this source has no qualified editor/exit controls",
+                    );
+                };
+                let _ = runtime.try_send_bytes(bytes::Bytes::from_static(controls.0.as_bytes()));
+                encode_success(id, ResponseResult::Ok {})
+            }
+            crate::api::schema::agents::AgentContextControlAction::Exit => {
+                let Some(controls) = harness.native_editor_controls() else {
+                    return encode_error(
+                        id,
+                        "unsupported_native_control",
+                        "this source has no qualified editor/exit controls",
+                    );
+                };
+                let _ = runtime.try_send_bytes(bytes::Bytes::from_static(controls.1.as_bytes()));
+                encode_success(id, ResponseResult::Ok {})
+            }
+        }
     }
 
     pub(crate) fn begin_harness_replacement(

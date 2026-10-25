@@ -203,16 +203,39 @@ impl Harness {
     /// Native runtime APIs qualified for an atomic active-branch snapshot and close.
     pub fn native_context_version(&self) -> Option<u32> {
         match self.agent {
-            Agent::Pi if cfg!(unix) => Some(1),
+            Agent::Pi | Agent::Codex | Agent::Claude if cfg!(unix) => Some(1),
             _ => None,
         }
     }
     pub fn native_context_format(&self) -> Option<&'static str> {
-        self.native_context_version().map(|_| "pi.session.v3")
+        self.native_context_version().and(match self.agent {
+            Agent::Pi => Some("pi.session.v3"),
+            Agent::Codex => Some("codex.rollout.v163"),
+            Agent::Claude => Some("claude.transcript.v2.1.302"),
+            _ => None,
+        })
+    }
+    pub fn native_editor_controls(&self) -> Option<(&'static str, &'static str)> {
+        match self.agent {
+            Agent::Codex => Some(("\x07", "\x04")),
+            Agent::Claude => Some(("\x07", "/exit\r")),
+            _ => None,
+        }
     }
     pub fn native_import_formats(&self) -> &'static [&'static str] {
         match self.agent {
-            Agent::Codex => &["pi.session.v3"],
+            Agent::Codex
+            | Agent::Claude
+            | Agent::Pi
+            | Agent::Grok
+            | Agent::OpenCode
+            | Agent::Kilo => {
+                &[
+                    "pi.session.v3",
+                    "codex.rollout.v163",
+                    "claude.transcript.v2.1.302",
+                ]
+            }
             _ => &[],
         }
     }
@@ -230,7 +253,7 @@ impl Harness {
                 "complete native history import is not qualified for this pair",
             ));
         }
-        let history = super::session_history::read_pi_snapshot(snapshot)?;
+        let history = super::session_history::read_native_snapshot(snapshot)?;
         match self.agent {
             Agent::Codex => {
                 super::session_history::verify_codex_import_version(self.executable)?;
@@ -243,6 +266,34 @@ impl Harness {
                     &snapshot.cwd,
                     &super::env::codex_dir()?,
                     &provider,
+                )
+            }
+            Agent::Claude => {
+                super::session_history::claude::import_claude_history(
+                    &history,
+                    &snapshot.cwd,
+                    &super::env::claude_dir()?,
+                )
+            }
+            Agent::Pi => {
+                super::session_history::pi::import_pi_history(
+                    &history,
+                    &snapshot.cwd,
+                    &super::env::pi_dir()?,
+                )
+            }
+            Agent::Grok => {
+                super::session_history::grok::import_grok_history(
+                    &history,
+                    &snapshot.cwd,
+                    &super::env::grok_dir()?,
+                )
+            }
+            Agent::OpenCode | Agent::Kilo => {
+                super::session_history::opencode_family::import_family_history(
+                    &history,
+                    &snapshot.cwd,
+                    self.executable,
                 )
             }
             _ => Err(std::io::Error::new(

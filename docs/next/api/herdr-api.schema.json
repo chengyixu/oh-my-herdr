@@ -1245,6 +1245,29 @@
           ],
           "type": "object"
         },
+        "AgentContextControlAction": {
+          "enum": [
+            "inspect",
+            "open_editor",
+            "exit"
+          ],
+          "type": "string"
+        },
+        "AgentContextControlParams": {
+          "properties": {
+            "action": {
+              "$ref": "#/schemas/request/$defs/AgentContextControlAction"
+            },
+            "context": {
+              "$ref": "#/schemas/request/$defs/NativeContextRegistration"
+            }
+          },
+          "required": [
+            "context",
+            "action"
+          ],
+          "type": "object"
+        },
         "AgentHarnessCommitParams": {
           "description": "Atomically verify both exact instances before moving the original pane\ninto a separate tab and focusing the ready replacement.",
           "properties": {
@@ -5927,6 +5950,22 @@
         {
           "properties": {
             "method": {
+              "const": "agent.context.control",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentContextControlParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "agent.harness.commit",
               "type": "string"
             },
@@ -8854,6 +8893,39 @@
           },
           "type": "object"
         },
+        "NativeInputEvidence": {
+          "properties": {
+            "epoch": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "known": {
+              "type": "boolean"
+            },
+            "potential_submission_epoch": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "uncertain_attachment_epoch": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "epoch",
+            "known"
+          ],
+          "type": "object"
+        },
         "NotificationShowReason": {
           "enum": [
             "shown",
@@ -10604,6 +10676,32 @@
               "required": [
                 "type",
                 "entries"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "input": {
+                  "$ref": "#/schemas/success_response/$defs/NativeInputEvidence"
+                },
+                "output_seq": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "queue_unchanged": {
+                  "type": "boolean"
+                },
+                "type": {
+                  "const": "native_context_control",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "input",
+                "queue_unchanged",
+                "output_seq"
               ],
               "type": "object"
             },

@@ -139,6 +139,8 @@ pub struct TerminalState {
     pub persisted_agent_session: Option<crate::agent_resume::PersistedAgentSession>,
     pub(crate) native_context:
         Option<crate::integration::native_context::NativeContextRegistration>,
+    pub(crate) native_context_input_baseline:
+        Option<crate::pane::native_input::NativeInputEvidence>,
     /// Snapshot capture restores this exact source until replacement commits.
     pub(crate) native_replacement_recovery_session:
         Option<crate::agent_resume::PersistedAgentSession>,
@@ -185,6 +187,7 @@ impl TerminalState {
             metadata_tokens: crate::metadata_tokens::MetadataTokens::default(),
             persisted_agent_session: None,
             native_context: None,
+            native_context_input_baseline: None,
             native_replacement_recovery_session: None,
             native_replacement_input_paused: false,
             reported_resume: None,
