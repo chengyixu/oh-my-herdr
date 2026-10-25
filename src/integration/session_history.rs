@@ -660,8 +660,8 @@ pub(crate) fn verify_codex_import_version(executable: &str) -> io::Result<()> {
     };
     let version =
         std::str::from_utf8(&bytes).map_err(|_| invalid("target native version is invalid"))?;
-    if version.trim() != "codex-cli 0.163.0" {
-        return Err(invalid("complete native history import is qualified for Codex 0.163.0; this installed version requires qualification before switching"));
+    if version.trim() != "codex-cli 0.163.0" && version.trim() != "codex-cli 0.164.0" {
+        return Err(invalid("complete native history import is qualified for Codex 0.163.0 / 0.164.0; this installed version requires qualification before switching"));
     }
     Ok(())
 }
@@ -860,7 +860,7 @@ mod tests {
         let root = std::path::PathBuf::from(format!("/tmp/ohversion-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("native-version");
-        std::fs::write(&path, "#!/bin/sh\nprintf 'codex-cli 0.164.0\\n'\n").unwrap();
+        std::fs::write(&path, "#!/bin/sh\nprintf 'codex-cli 0.165.0\\n'\n").unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
         let result = verify_codex_import_version(path.to_str().unwrap());
         assert!(result
