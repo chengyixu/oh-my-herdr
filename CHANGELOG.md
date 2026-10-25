@@ -1,6 +1,17 @@
 # Changelog
 
-## Unreleased
+## [0.9.8] - 2026-10-25
+
+### Added
+- Same-pane lossless harness switching across all active integrations (Pi, Codex, Claude, Grok, OpenCode, Kilo). Swapping harnesses preserves the existing PTY/shell, terminal session ID, and complete recorded conversation history.
+- Native bypass and auto-approval modes enabled by default for all supported managed harnesses (Claude `--dangerously-skip-permissions`, Codex `--dangerously-bypass-approvals-and-sandbox`, Goose auto mode, etc.).
+- Shared atomic native history storage with rollback safety: prepared imports are staged atomically via temporary files and hardlinks; failed transitions rollback to the source session cleanly without data loss.
+- Owned native helper processes and isolation from pane environment variables.
+- Full qualification for Codex 0.164.0 native session history import and resume.
+
+### Removed
+- Retired MiniMax Code integration and launch configurations.
+
 
 ## [0.9.3] - 2026-09-29
 
