@@ -105,6 +105,37 @@ pub(crate) fn launch_executable() -> std::io::Result<std::path::PathBuf> {
 }
 
 #[cfg(unix)]
+pub(crate) fn configure_native_helper(command: &mut std::process::Command) -> std::io::Result<()> {
+    configure_status_command(command);
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub(crate) fn configure_native_helper(_command: &mut std::process::Command) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "native helper process ownership is not qualified on this platform",
+    ))
+}
+
+#[cfg(unix)]
+pub(crate) fn native_helper_guard(
+    child: &std::process::Child,
+) -> std::io::Result<StatusCommandGuard> {
+    StatusCommandGuard::for_std_child(child)
+}
+
+#[cfg(not(unix))]
+pub(crate) fn native_helper_guard(
+    _child: &std::process::Child,
+) -> std::io::Result<StatusCommandGuard> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "native helper process ownership is not qualified on this platform",
+    ))
+}
+
+#[cfg(unix)]
 pub(crate) fn run_foreground_native_command(
     command: &mut std::process::Command,
 ) -> std::io::Result<i32> {

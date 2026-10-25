@@ -8,6 +8,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+mod storage;
+pub(crate) use storage::ImportedHistory;
+
 const MAX_HISTORY_BYTES: usize = 256 * 1024 * 1024;
 static NEXT_IMPORT: AtomicU64 = AtomicU64::new(0);
 
@@ -19,33 +22,6 @@ pub(crate) struct NativeHistory {
     model_messages: Option<Vec<Value>>,
     pub(crate) source_bytes: Vec<u8>,
     pub(crate) source_context: Option<Value>,
-}
-
-#[derive(Debug)]
-pub(crate) struct ImportedHistory {
-    pub(crate) path: PathBuf,
-    pub(crate) source_archive: PathBuf,
-    pub(crate) source_context_archive: Option<PathBuf>,
-    pub(crate) native_session: crate::agent_resume::PersistedAgentSession,
-    retained: bool,
-    pub(crate) messages: usize,
-}
-
-impl ImportedHistory {
-    pub(crate) fn retain_for_recovery(&mut self) {
-        self.retained = true;
-    }
-}
-impl Drop for ImportedHistory {
-    fn drop(&mut self) {
-        if !self.retained {
-            let _ = std::fs::remove_file(&self.path);
-            let _ = std::fs::remove_file(&self.source_archive);
-            if let Some(path) = &self.source_context_archive {
-                let _ = std::fs::remove_file(path);
-            }
-        }
-    }
 }
 
 fn invalid(message: &str) -> io::Error {
@@ -675,96 +651,34 @@ pub(crate) fn import_codex_history(
     codex_home: &Path,
     target_provider: &str,
 ) -> io::Result<ImportedHistory> {
-    let now = time::OffsetDateTime::now_utc();
-    let stamp = now
-        .format(&time::format_description::well_known::Rfc3339)
-        .map_err(io::Error::other)?;
-    let digest = Sha256::digest(format!(
-        "{}:{}:{}:{}",
-        history.session_id,
-        std::process::id(),
-        now.unix_timestamp_nanos(),
-        NEXT_IMPORT.fetch_add(1, Ordering::Relaxed)
-    ));
-    let hex = format!("{digest:x}");
-    let session_id = format!(
-        "{}-{}-4{}-a{}-{}",
-        &hex[..8],
-        &hex[8..12],
-        &hex[13..16],
-        &hex[17..20],
-        &hex[20..32]
-    );
-    let records = codex_records(history, &session_id, cwd, &stamp, target_provider)?;
-    let directory = codex_home.join("sessions").join(format!(
-        "{:04}/{:02}/{:02}",
-        now.year(),
-        u8::from(now.month()),
-        now.day()
-    ));
-    std::fs::create_dir_all(&directory)?;
-    let path = directory.join(format!(
-        "rollout-{:04}-{:02}-{:02}T{:02}-{:02}-{:02}-{session_id}.jsonl",
-        now.year(),
-        u8::from(now.month()),
-        now.day(),
-        now.hour(),
-        now.minute(),
-        now.second()
-    ));
-    let source_archive = directory.join(format!("ohmyherdr-source-{session_id}.jsonl.source"));
-    let source_context_archive = history
-        .source_context
-        .as_ref()
-        .map(|_| directory.join(format!("ohmyherdr-source-{session_id}.context.json")));
-    let mut created = Vec::new();
-    let result = (|| -> io::Result<()> {
-        let mut original = crate::platform::create_private_state_file(&source_archive)?;
-        created.push(source_archive.clone());
-        original.write_all(&history.source_bytes)?;
-        original.sync_all()?;
-        if let (Some(context), Some(path)) = (&history.source_context, &source_context_archive) {
-            let mut file = crate::platform::create_private_state_file(path)?;
-            created.push(path.clone());
-            serde_json::to_writer(&mut file, context)?;
-            file.sync_all()?;
-        }
-        let pending = path.with_extension("jsonl.pending");
-        let mut file = crate::platform::create_private_state_file(&pending)?;
-        created.push(pending.clone());
-        for record in records {
-            serde_json::to_writer(&mut file, &record)?;
-            file.write_all(b"\n")?;
-        }
-        file.sync_all()?;
-        drop(file);
-        // Publish a complete native rollout atomically and without replacing an
-        // existing destination. Native backfill must never see a partial import.
-        std::fs::hard_link(&pending, &path)?;
-        created.push(path.clone());
-        std::fs::remove_file(&pending)?;
-        crate::platform::sync_parent_directory(&directory)?;
-        Ok(())
-    })();
-    if let Err(error) = result {
-        for path in created {
-            let _ = std::fs::remove_file(path);
-        }
-        return Err(error);
-    }
-    Ok(ImportedHistory {
-        native_session: crate::agent_resume::PersistedAgentSession {
-            source: "herdr:codex".into(),
-            agent: "codex".into(),
-            session_ref: crate::agent_resume::AgentSessionRef::id(session_id.clone())
-                .ok_or_else(|| invalid("invalid imported native identity"))?,
-        },
-        retained: false,
-        path,
-        source_archive,
-        source_context_archive,
-        messages: history.messages.len(),
-    })
+    let identity = storage::Identity::new(history)?;
+    let records = codex_records(history, &identity.id, cwd, &identity.stamp, target_provider)?;
+    let now = identity.created;
+    let path = codex_home
+        .join("sessions")
+        .join(format!(
+            "{:04}/{:02}/{:02}",
+            now.year(),
+            u8::from(now.month()),
+            now.day()
+        ))
+        .join(format!(
+            "rollout-{:04}-{:02}-{:02}T{:02}-{:02}-{:02}-{}.jsonl",
+            now.year(),
+            u8::from(now.month()),
+            now.day(),
+            now.hour(),
+            now.minute(),
+            now.second(),
+            identity.id
+        ));
+    let native_session = crate::agent_resume::PersistedAgentSession {
+        source: "herdr:codex".into(),
+        agent: "codex".into(),
+        session_ref: crate::agent_resume::AgentSessionRef::id(identity.id.clone())
+            .ok_or_else(|| invalid("invalid imported native identity"))?,
+    };
+    storage::publish(history, records, path, native_session, &identity.id)
 }
 
 #[cfg(test)]
