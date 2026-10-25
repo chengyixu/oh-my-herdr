@@ -1200,7 +1200,7 @@ mod tests {
         assert!(restore_plan_for_snapshot(&session, false).is_none());
         assert_eq!(
             restore_plan_for_snapshot(&session, true).unwrap().argv,
-            vec!["pi", "--session", pi_session_path.as_str()]
+            vec!["pi", "--approve", "--session", pi_session_path.as_str()]
         );
 
         let unsupported_path = super::super::snapshot::PaneAgentSessionSnapshot {
@@ -1230,7 +1230,7 @@ mod tests {
             .expect("first restore should get a plan");
         assert_eq!(
             first.argv,
-            vec!["pi", "--session", pi_session_path.as_str()]
+            vec!["pi", "--approve", "--session", pi_session_path.as_str()]
         );
         assert!(take_restore_plan_for_snapshot(&session, true, &mut resumed).is_none());
     }
@@ -1345,7 +1345,7 @@ mod tests {
         );
         let plan = startup.restore_plan.expect("reported resume plan");
         assert_eq!(plan.agent, "pi");
-        assert_eq!(plan.argv, resume.argv);
+        assert_eq!(plan.argv, ["pi", "--approve", "--continue", "--model", "m"]);
         assert!(startup.initial_history_ansi.is_none());
 
         let custom = super::super::snapshot::PaneAgentResumeSnapshot {

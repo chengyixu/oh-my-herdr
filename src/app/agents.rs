@@ -584,9 +584,16 @@ impl App {
         let (settings, binding) = profile_launch_settings(&session.agent, &profile)
             .map_err(|error| format!("{error:?}"))?;
         args.extend(settings);
-        args.extend(
-            profile_md_args(&session.agent, &profile.mds).map_err(|error| format!("{error:?}"))?,
-        );
+        // The loaded source instructions travel inside the native snapshot. A
+        // prompt-style instruction flag would submit a new user turn.
+        if crate::harness::find(&session.agent)
+            .is_some_and(|harness| harness.instructions != crate::harness::Instructions::Prompt)
+        {
+            args.extend(
+                profile_md_args(&session.agent, &profile.mds)
+                    .map_err(|error| format!("{error:?}"))?,
+            );
+        }
         Ok((args, binding))
     }
 
@@ -617,6 +624,10 @@ impl App {
         let mut argv = vec![kind.harness().executable.to_string()];
         // The canonical resume plan already includes the integration's launch flags.
         argv.extend_from_slice(args);
+        let argv = kind
+            .harness()
+            .scope_launch_environment(argv)
+            .map_err(|error| error.to_string())?;
         let cwd = self
             .state
             .terminals
@@ -754,18 +765,15 @@ impl App {
         let shell_name = available_shell_name(runtime)
             .ok_or_else(|| AgentStartError::TargetBusy(params.pane_id.clone()))?;
 
-        let mut argv = vec![crate::detect::interactive_agent_executable(kind).to_string()];
-        argv.extend(
-            kind.harness()
-                .launch_args
-                .iter()
-                .map(|arg| (*arg).to_string()),
-        );
-        argv.extend(params.args.clone());
+        let argv = kind.harness().launch_argv(&params.args);
+        let command_argv = kind
+            .harness()
+            .scope_launch_environment(argv.clone())
+            .map_err(|_| AgentStartError::InvalidArgument)?;
         let command = match (cwd, env_binding.as_ref()) {
             (Some(cwd), Some((target, source))) => {
                 crate::platform::interactive_shell_command_with_env_in_cwd(
-                    &argv,
+                    &command_argv,
                     &shell_name,
                     cwd,
                     target,
@@ -773,9 +781,9 @@ impl App {
                 )
             }
             (Some(cwd), None) => {
-                crate::platform::interactive_shell_command_in_cwd(&argv, &shell_name, cwd)
+                crate::platform::interactive_shell_command_in_cwd(&command_argv, &shell_name, cwd)
             }
-            (None, _) => crate::platform::interactive_shell_command(&argv, &shell_name),
+            (None, _) => crate::platform::interactive_shell_command(&command_argv, &shell_name),
         }
         .ok_or(AgentStartError::InvalidArgument)?;
         let bytes = crate::app::api_helpers::encode_api_submission(runtime, &command);
@@ -2555,6 +2563,7 @@ mod tests {
             spawned.argv,
             vec![
                 "claude".to_string(),
+                "--dangerously-skip-permissions".to_string(),
                 "--append-system-prompt-file".to_string(),
                 markdown.display().to_string(),
                 "--model".to_string(),

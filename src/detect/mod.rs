@@ -72,10 +72,6 @@ pub fn agent_label(agent: Agent) -> &'static str {
     agent.harness().id
 }
 
-pub fn interactive_agent_executable(agent: Agent) -> &'static str {
-    agent.harness().executable
-}
-
 pub fn parse_agent_label(agent: &str) -> Option<Agent> {
     let name = normalized_agent_lookup_name(agent);
     parse_canonical_agent_label(&name).or_else(|| lookup_agent(&name))
@@ -924,10 +920,10 @@ mod tests {
             (Agent::Muse, "muse"),
         ];
         for agent in Agent::ALL {
-            assert!(!interactive_agent_executable(agent).is_empty());
+            assert!(!agent.harness().executable.is_empty());
         }
         for (agent, executable) in expected {
-            assert_eq!(interactive_agent_executable(agent), executable);
+            assert_eq!(agent.harness().executable, executable);
         }
     }
 

@@ -91,52 +91,112 @@ macro_rules! terminal_harnesses {
 use Instructions::{AppendFiles, AppendText, Codex, Native, Prompt};
 use IntegrationTarget as Hook;
 terminal_harnesses! {
-    Codex => ("codex", "Codex", "codex", &["--no-daemon"], Codex, CODEX, Some(Hook::Codex), Some("npm install -g @openai/codex")),
-    Pi => ("pi", "Pi", "pi", &[], AppendFiles("--append-system-prompt"), PI, Some(Hook::Pi), Some("npm install -g @earendil-works/pi-coding-agent")),
-    Claude => ("claude", "Claude Code", "claude", &[], AppendFiles("--append-system-prompt-file"), CLAUDE, Some(Hook::Claude), Some("npm install -g @anthropic-ai/claude-code")),
-    Omp => ("omp", "Oh My Pi", "omp", &[], AppendFiles("--append-system-prompt"), MODEL, Some(Hook::Omp), Some("npm install -g @oh-my-pi/pi-coding-agent")),
-    OpenCode => ("opencode", "OpenCode", "opencode", &[], Prompt, MODEL, Some(Hook::Opencode), Some("npm install -g opencode-ai")),
-    GithubCopilot => ("copilot", "GitHub Copilot", "copilot", &[], Native, MODEL, Some(Hook::Copilot), Some("npm install -g @github/copilot")),
-    Cursor => ("cursor", "Cursor Agent", if cfg!(windows) { "cursor-agent.cmd" } else { "cursor-agent" }, &[], Native, NATIVE, Some(Hook::Cursor), None),
-    Gemini => ("gemini", "Gemini CLI", "gemini", &[], Native, NATIVE, None, Some("npm install -g @google/gemini-cli")),
-    Antigravity => ("agy", "Antigravity CLI", "agy", &[], Native, NATIVE, Some(Hook::AntigravityCli), None),
-    Cline => ("cline", "Cline CLI", "cline", &[], Native, NATIVE, None, Some("npm install -g cline")),
-    Devin => ("devin", "Devin CLI", "devin", &[], Native, NATIVE, Some(Hook::Devin), None),
-    Droid => ("droid", "Factory Droid", "droid", &[], Native, NATIVE, Some(Hook::Droid), None),
-    Kimi => ("kimi", "Kimi Code", "kimi", &[], Native, NATIVE, Some(Hook::Kimi), Some("uv tool install kimi-cli")),
-    Kiro => ("kiro", "Kiro CLI", "kiro-cli", &[], Native, NATIVE, None, None),
-    Amp => ("amp", "Amp", "amp", &[], Native, NATIVE, None, Some("npm install -g @ampcode/cli")),
-    Grok => ("grok", "Grok Build", "grok", &[], Native, NATIVE, Some(Hook::Grok), None),
-    Hermes => ("hermes", "Hermes Agent", "hermes", &[], Native, NATIVE, Some(Hook::Hermes), None),
-    Kilo => ("kilo", "Kilo CLI", "kilo", &[], Prompt, MODEL, Some(Hook::Kilo), Some("npm install -g @kilocode/cli")),
-    Qodercli => ("qodercli", "Qoder CLI", "qodercli", &[], AppendText("--append-system-prompt"), MODEL, Some(Hook::Qodercli), Some("npm install -g @qoder-ai/qodercli")),
-    QoderCN => ("qoderclicn", "Qoder CLI China", "qoderclicn", &[], Native, NATIVE, None, None),
-    Qwen => ("qwen", "Qwen Code", "qwen", &[], AppendText("--append-system-prompt"), MODEL, Some(Hook::Qwen), Some("npm install -g @qwen-code/qwen-code")),
+    Codex => ("codex", "Codex", "codex", &["--no-daemon", "--dangerously-bypass-approvals-and-sandbox"], Codex, CODEX, Some(Hook::Codex), Some("npm install -g @openai/codex")),
+    Pi => ("pi", "Pi", "pi", &["--approve"], AppendFiles("--append-system-prompt"), PI, Some(Hook::Pi), Some("npm install -g @earendil-works/pi-coding-agent")),
+    Claude => ("claude", "Claude Code", "claude", &["--dangerously-skip-permissions"], AppendFiles("--append-system-prompt-file"), CLAUDE, Some(Hook::Claude), Some("npm install -g @anthropic-ai/claude-code")),
+    Omp => ("omp", "Oh My Pi", "omp", &["--auto-approve"], AppendFiles("--append-system-prompt"), MODEL, Some(Hook::Omp), Some("npm install -g @oh-my-pi/pi-coding-agent")),
+    OpenCode => ("opencode", "OpenCode", "opencode", &["--auto"], Prompt, MODEL, Some(Hook::Opencode), Some("npm install -g opencode-ai")),
+    GithubCopilot => ("copilot", "GitHub Copilot", "copilot", &["--yolo"], Native, MODEL, Some(Hook::Copilot), Some("npm install -g @github/copilot")),
+    Cursor => ("cursor", "Cursor Agent", if cfg!(windows) { "cursor-agent.cmd" } else { "cursor-agent" }, &["--force", "--sandbox", "disabled"], Native, NATIVE, Some(Hook::Cursor), None),
+    Gemini => ("gemini", "Gemini CLI", "gemini", &["--yolo"], Native, NATIVE, None, Some("npm install -g @google/gemini-cli")),
+    Antigravity => ("agy", "Antigravity CLI", "agy", &["--dangerously-skip-permissions"], Native, NATIVE, Some(Hook::AntigravityCli), None),
+    Cline => ("cline", "Cline CLI", "cline", &["--auto-approve", "true"], Native, NATIVE, None, Some("npm install -g cline")),
+    Devin => ("devin", "Devin CLI", "devin", &["--permission-mode", "dangerous"], Native, NATIVE, Some(Hook::Devin), None),
+    Droid => ("droid", "Factory Droid", "droid", &["--auto", "high"], Native, NATIVE, Some(Hook::Droid), None),
+    Kimi => ("kimi", "Kimi Code", "kimi", &["--yolo"], Native, NATIVE, Some(Hook::Kimi), Some("uv tool install kimi-cli")),
+    Kiro => ("kiro", "Kiro CLI", "kiro-cli", &["chat", "--trust-all-tools"], Native, NATIVE, None, None),
+    Amp => ("amp", "Amp", "amp", &["--dangerously-allow-all"], Native, NATIVE, None, Some("npm install -g @ampcode/cli")),
+    Grok => ("grok", "Grok Build", "grok", &["--always-approve"], Native, NATIVE, Some(Hook::Grok), None),
+    Hermes => ("hermes", "Hermes Agent", "hermes", &["--yolo"], Native, NATIVE, Some(Hook::Hermes), None),
+    Kilo => ("kilo", "Kilo CLI", "kilo", &["--auto"], Prompt, MODEL, Some(Hook::Kilo), Some("npm install -g @kilocode/cli")),
+    Qodercli => ("qodercli", "Qoder CLI", "qodercli", &["--dangerously-skip-permissions"], AppendText("--append-system-prompt"), MODEL, Some(Hook::Qodercli), Some("npm install -g @qoder-ai/qodercli")),
+    QoderCN => ("qoderclicn", "Qoder CLI China", "qoderclicn", &["--dangerously-skip-permissions"], Native, NATIVE, None, None),
+    Qwen => ("qwen", "Qwen Code", "qwen", &["--yolo"], AppendText("--append-system-prompt"), MODEL, Some(Hook::Qwen), Some("npm install -g @qwen-code/qwen-code")),
     Letta => ("letta", "Letta Code", "letta", &[], Native, MODEL, None, Some("npm install -g @letta-ai/letta-code")),
-    Mastracode => ("mastracode", "Mastra Code", "mastracode", &[], Native, NATIVE, Some(Hook::Mastracode), Some("npm install -g mastracode")),
-    Maki => ("maki", "Maki", "maki", &[], Native, NATIVE, None, None),
-    Muse => ("muse", "Muse", "muse", &[], Native, NATIVE, None, None),
-    MiMo => ("mimocode", "MiMo Code", "mimo", &[], Prompt, MODEL, None, Some("npm install -g @mimo-ai/cli")),
-    StepCode => ("stepcode", "StepCode", "step", &[], Native, NATIVE, None, None),
-    Omo => ("omo", "OmO", "omo", &[], AppendFiles("--append-system-prompt"), MODEL, None, Some("npm install -g omo-ai")),
+    Mastracode => ("mastracode", "Mastra Code", "mastracode", &["--permission-mode", "auto"], Native, NATIVE, Some(Hook::Mastracode), Some("npm install -g mastracode")),
+    Maki => ("maki", "Maki", "maki", &["--yolo"], Native, NATIVE, None, None),
+    Muse => ("muse", "Muse", "muse", &["--yolo"], Native, NATIVE, None, None),
+    MiMo => ("mimocode", "MiMo Code", "mimo", &["--dangerously-skip-permissions"], Prompt, MODEL, None, Some("npm install -g @mimo-ai/cli")),
+    StepCode => ("stepcode", "StepCode", "step", &["--approval-mode", "auto"], Native, NATIVE, None, None),
+    Omo => ("omo", "OmO", "omo", &["--permission-preset", "full-access"], AppendFiles("--append-system-prompt"), MODEL, None, Some("npm install -g omo-ai")),
     Prime => ("prime-agent", "Prime Agent", "prime-agent", &[], Native, NATIVE, None, None),
     Goose => ("goose", "Goose", "goose", &["session"], Native, NATIVE, None, Some("brew install block-goose-cli")),
-    Crush => ("crush", "Crush", "crush", &[], Native, NATIVE, None, Some("npm install -g @charmland/crush")),
+    Crush => ("crush", "Crush", "crush", &["--yolo"], Native, NATIVE, None, Some("npm install -g @charmland/crush")),
     Dsh => ("dsh", "DeepSeek Harness", "dsh", &["tui"], Native, NATIVE, None, Some("npm install -g @deepseek-ai/dsh")),
-    CommandCode => ("commandcode", "Command Code", "command-code", &[], Native, NATIVE, None, Some("npm install -g command-code")),
+    CommandCode => ("commandcode", "Command Code", "command-code", &["--yolo"], Native, NATIVE, None, Some("npm install -g command-code")),
     Empryo => ("empryo", "Empryo", "empryo", &[], Native, NATIVE, None, None),
-    Ante => ("ante", "Ante", "ante", &[], Native, NATIVE, None, None),
+    Ante => ("ante", "Ante", "ante", &["--yolo"], Native, NATIVE, None, None),
     Jcode => ("jcode", "jcode", "jcode", &[], Native, NATIVE, None, None),
-    MiniMax => ("minimax-code", "MiniMax Code", "mcode", &[], Native, NATIVE, None, Some("npm install -g @minimax-ai/code")),
-    Codebuddy => ("codebuddy", "CodeBuddy Code", "codebuddy", &[], AppendText("--append-system-prompt"), MODEL, None, Some("npm install -g @tencent-ai/codebuddy-code")),
-    Atomcode => ("atomcode", "AtomCode", "atomcode", &[], Native, NATIVE, None, Some("npm install -g @atomgit.com/atomcode")),
-    Snow => ("snow", "Snow CLI", "snow", &[], Native, NATIVE, None, Some("npm install -g snow-ai")),
+    Codebuddy => ("codebuddy", "CodeBuddy Code", "codebuddy", &["--dangerously-skip-permissions"], AppendText("--append-system-prompt"), MODEL, None, Some("npm install -g @tencent-ai/codebuddy-code")),
+    Atomcode => ("atomcode", "AtomCode", "atomcode", &["--dangerously-skip-permissions"], Native, NATIVE, None, Some("npm install -g @atomgit.com/atomcode")),
+    Snow => ("snow", "Snow CLI", "snow", &["--yolo"], Native, NATIVE, None, Some("npm install -g snow-ai")),
 }
 
 pub fn find(id: &str) -> Option<&'static Harness> {
     HARNESSES.iter().find(|h| h.id == id || h.executable == id)
 }
 impl Harness {
+    /// Merge native defaults by option group. Explicit caller values keep their
+    /// authority, and already reported flags are not duplicated on cold restore.
+    pub(crate) fn launch_argv(&self, args: &[String]) -> Vec<String> {
+        let mut argv = vec![self.executable.to_string()];
+        let mut defaults = self.launch_args.iter().peekable();
+        while let Some(flag) = defaults.next() {
+            let value = if flag.starts_with('-')
+                && defaults.peek().is_some_and(|next| !next.starts_with('-'))
+            {
+                defaults.next().copied()
+            } else {
+                None
+            };
+            let provided = args
+                .iter()
+                .take_while(|arg| arg.as_str() != "--")
+                .any(|arg| {
+                    arg == flag
+                        || arg
+                            .strip_prefix(flag)
+                            .is_some_and(|suffix| suffix.starts_with('='))
+                });
+            if !provided {
+                argv.push((*flag).into());
+                if let Some(value) = value {
+                    argv.push(value.into());
+                }
+            }
+        }
+        argv.extend_from_slice(args);
+        argv
+    }
+
+    /// Process-local permission settings for native CLIs that have no flag.
+    pub(crate) fn launch_environment(&self) -> &'static [(&'static str, &'static str)] {
+        match self.agent {
+            Agent::Goose => &[("GOOSE_MODE", "auto")],
+            _ => &[],
+        }
+    }
+
+    /// Scope native environment defaults to the launched process. The helper
+    /// execs on Unix, retaining the pane's process and shell ownership.
+    pub(crate) fn scope_launch_environment(
+        &self,
+        argv: Vec<String>,
+    ) -> std::io::Result<Vec<String>> {
+        if self.launch_environment().is_empty() {
+            return Ok(argv);
+        }
+        let mut scoped = vec![
+            crate::platform::launch_executable()?
+                .to_string_lossy()
+                .into_owned(),
+            "__harness-launch".into(),
+            self.id.into(),
+        ];
+        scoped.extend(argv.into_iter().skip(1));
+        Ok(scoped)
+    }
+
     pub fn default_harness() -> &'static str {
         HARNESSES.first().map_or("", |h| h.id)
     }
@@ -236,6 +296,71 @@ mod tests {
         }
     }
     #[test]
+    fn retired_terminal_harness_is_not_detected_or_launchable() {
+        for label in ["minimax-code", "mcode"] {
+            assert!(find(label).is_none(), "retired harness {label} is offered");
+            assert!(crate::detect::parse_agent_label(label).is_none());
+        }
+    }
+
+    #[test]
+    fn every_catalog_member_declares_a_native_permission_default() {
+        let flags = [
+            "--dangerously-bypass-approvals-and-sandbox",
+            "--dangerously-skip-permissions",
+            "--approve",
+            "--auto-approve",
+            "--auto",
+            "--yolo",
+            "--force",
+            "--permission-mode",
+            "--trust-all-tools",
+            "--dangerously-allow-all",
+            "--always-approve",
+            "--approval-mode",
+            "--permission-preset",
+        ];
+        for harness in HARNESSES {
+            let native_only = matches!(
+                harness.agent,
+                Agent::Letta | Agent::Prime | Agent::Empryo | Agent::Jcode | Agent::Dsh
+            );
+            assert!(
+                native_only
+                    || !harness.launch_environment().is_empty()
+                    || harness.launch_args.iter().any(|arg| flags.contains(arg)),
+                "{} has no reviewed permission default",
+                harness.id
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_native_option_groups_are_not_duplicated_or_rewritten() {
+        let devin = find("devin").unwrap();
+        assert_eq!(
+            devin.launch_argv(&[
+                "--permission-mode".into(),
+                "auto".into(),
+                "--model".into(),
+                "m".into()
+            ]),
+            ["devin", "--permission-mode", "auto", "--model", "m"]
+        );
+        let codex = find("codex").unwrap();
+        let launch = codex.launch_argv(&["--no-daemon".into(), "resume".into(), "id".into()]);
+        assert_eq!(
+            launch
+                .iter()
+                .filter(|a| a.as_str() == "--no-daemon")
+                .count(),
+            1
+        );
+        assert!(launch.contains(&"--dangerously-bypass-approvals-and-sandbox".into()));
+        assert!(launch.ends_with(&["resume".into(), "id".into()]));
+    }
+
+    #[test]
     fn codex_pane_launch_and_resume_use_process_local_native_runtime() {
         let harness = find("codex").unwrap();
         assert!(harness.launch_args.contains(&"--no-daemon"));
@@ -245,7 +370,16 @@ mod tests {
             &crate::agent_resume::AgentSessionRef::id("native-id").unwrap(),
         )
         .unwrap();
-        assert_eq!(plan.argv, ["codex", "--no-daemon", "resume", "native-id"]);
+        assert_eq!(
+            plan.argv,
+            [
+                "codex",
+                "--no-daemon",
+                "--dangerously-bypass-approvals-and-sandbox",
+                "resume",
+                "native-id"
+            ]
+        );
     }
 
     #[test]

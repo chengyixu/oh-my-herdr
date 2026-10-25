@@ -104,6 +104,21 @@ pub(crate) fn launch_executable() -> std::io::Result<std::path::PathBuf> {
     std::env::current_exe()
 }
 
+#[cfg(unix)]
+pub(crate) fn run_foreground_native_command(
+    command: &mut std::process::Command,
+) -> std::io::Result<i32> {
+    use std::os::unix::process::CommandExt;
+    Err(command.exec())
+}
+
+#[cfg(not(unix))]
+pub(crate) fn run_foreground_native_command(
+    command: &mut std::process::Command,
+) -> std::io::Result<i32> {
+    command.status().map(|status| status.code().unwrap_or(1))
+}
+
 pub(crate) fn detached_custom_command_process(command: &str) -> std::process::Command {
     let mut process = detached_custom_command_process_platform(command);
     configure_background_command(&mut process);

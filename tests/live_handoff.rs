@@ -2072,6 +2072,7 @@ fn live_handoff_preserves_typed_profile_and_saved_harness_spawn() {
         launched["result"]["spawned"]["argv"],
         serde_json::json!([
             "claude",
+            "--dangerously-skip-permissions",
             "--append-system-prompt-file",
             canonical_context.display().to_string()
         ])
@@ -2092,7 +2093,7 @@ fn live_handoff_preserves_typed_profile_and_saved_harness_spawn() {
             Duration::from_secs(5),
         ),
         format!(
-            "--append-system-prompt-file\n{}\n",
+            "--dangerously-skip-permissions\n--append-system-prompt-file\n{}\n",
             canonical_context.display()
         )
     );

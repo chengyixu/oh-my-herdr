@@ -3,6 +3,7 @@ mod agent_transport;
 mod agent_wait;
 mod agents;
 mod harness;
+mod harness_permissions;
 mod hooks;
 mod panes;
 mod plugins;

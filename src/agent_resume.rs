@@ -39,9 +39,14 @@ impl ReportedAgentResume {
     /// The same command can name different sessions in different directories,
     /// for example `agent --continue`, so the directory is part of its identity.
     pub fn plan(&self, cwd: &Path) -> AgentResumePlan {
+        // Cold restore keeps the harness's native automatic-approval policy even
+        // when the agent reported a resume command without it.
+        let argv = crate::harness::find(&self.agent)
+            .filter(|h| self.argv.first().is_some_and(|exe| exe == h.executable))
+            .map_or_else(|| self.argv.clone(), |h| h.launch_argv(&self.argv[1..]));
         AgentResumePlan {
             agent: self.agent.clone(),
-            argv: self.argv.clone(),
+            argv,
             dedupe_key: format!(
                 "{}\u{0}{}\u{0}{}\u{0}argv\u{0}{}",
                 self.source,
@@ -314,13 +319,7 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
     // Native launch policy also applies on cold restore. In particular Codex's
     // shared daemon cannot own one pane's environment or session identity.
     if let Some(kind) = crate::detect::parse_agent_label(agent) {
-        argv.splice(
-            1..1,
-            kind.harness()
-                .launch_args
-                .iter()
-                .map(|arg| (*arg).to_string()),
-        );
+        argv = kind.harness().launch_argv(&argv[1..]);
     }
     Some(AgentResumePlan {
         agent: agent.to_string(),
@@ -416,6 +415,42 @@ mod tests {
     }
 
     #[test]
+    fn reported_native_resume_inherits_bypass_without_changing_session_or_model() {
+        let reported = ReportedAgentResume {
+            source: "herdr:claude".into(),
+            agent: "claude".into(),
+            argv: argv(&[
+                "claude",
+                "--resume",
+                "exact-session",
+                "--model",
+                "target-model",
+            ]),
+        };
+        assert_eq!(
+            reported.plan(Path::new("/fixture")).argv,
+            argv(&[
+                "claude",
+                "--dangerously-skip-permissions",
+                "--resume",
+                "exact-session",
+                "--model",
+                "target-model"
+            ])
+        );
+        let explicit = ReportedAgentResume {
+            argv: argv(&[
+                "claude",
+                "--dangerously-skip-permissions",
+                "--resume",
+                "exact-session",
+            ]),
+            ..reported
+        };
+        assert_eq!(explicit.plan(Path::new("/fixture")).argv, explicit.argv);
+    }
+
+    #[test]
     fn native_state_reservation_excludes_full_lifecycle_sources() {
         assert!(is_reserved_native_state_source("herdr:claude", "claude"));
         assert!(is_reserved_native_state_source("herdr:codex", "codex"));
@@ -473,7 +508,12 @@ mod tests {
             )
             .unwrap()
             .argv,
-            vec!["claude", "--resume", "claude-session"]
+            vec![
+                "claude",
+                "--dangerously-skip-permissions",
+                "--resume",
+                "claude-session"
+            ]
         );
         assert_eq!(
             plan(
@@ -483,7 +523,13 @@ mod tests {
             )
             .unwrap()
             .argv,
-            vec!["codex", "--no-daemon", "resume", "codex-session"]
+            vec![
+                "codex",
+                "--no-daemon",
+                "--dangerously-bypass-approvals-and-sandbox",
+                "resume",
+                "codex-session"
+            ]
         );
         assert_eq!(
             plan(
@@ -493,7 +539,7 @@ mod tests {
             )
             .unwrap()
             .argv,
-            vec!["copilot", "--resume=copilot-session"]
+            vec!["copilot", "--yolo", "--resume=copilot-session"]
         );
         assert_eq!(
             plan(
@@ -503,7 +549,13 @@ mod tests {
             )
             .unwrap()
             .argv,
-            vec!["devin", "--resume", "devin-session"]
+            vec![
+                "devin",
+                "--permission-mode",
+                "dangerous",
+                "--resume",
+                "devin-session"
+            ]
         );
         assert_eq!(
             plan(
@@ -513,7 +565,7 @@ mod tests {
             )
             .unwrap()
             .argv,
-            vec!["droid", "--resume", "droid-session"]
+            vec!["droid", "--auto", "high", "--resume", "droid-session"]
         );
         assert_eq!(
             plan(
@@ -523,7 +575,7 @@ mod tests {
             )
             .unwrap()
             .argv,
-            vec!["kimi", "--session", "kimi-session"]
+            vec!["kimi", "--yolo", "--session", "kimi-session"]
         );
         assert_eq!(
             plan(
@@ -533,7 +585,13 @@ mod tests {
             )
             .unwrap()
             .argv,
-            vec!["mastracode", "--thread", "mastracode-session"]
+            vec![
+                "mastracode",
+                "--permission-mode",
+                "auto",
+                "--thread",
+                "mastracode-session"
+            ]
         );
         assert_eq!(
             plan(
@@ -543,7 +601,7 @@ mod tests {
             )
             .unwrap()
             .argv,
-            vec!["pi", "--session", pi_session.as_str()]
+            vec!["pi", "--approve", "--session", pi_session.as_str()]
         );
         assert_eq!(
             plan(
@@ -553,7 +611,11 @@ mod tests {
             )
             .unwrap()
             .argv,
-            vec!["omp", format!("--resume={omp_session}").as_str()]
+            vec![
+                "omp",
+                "--auto-approve",
+                format!("--resume={omp_session}").as_str()
+            ]
         );
         assert_eq!(
             plan(
@@ -563,7 +625,7 @@ mod tests {
             )
             .unwrap()
             .argv,
-            vec!["hermes", "--resume", "hermes-session"]
+            vec!["hermes", "--yolo", "--resume", "hermes-session"]
         );
         assert_eq!(
             plan(
@@ -573,7 +635,7 @@ mod tests {
             )
             .unwrap()
             .argv,
-            vec!["opencode", "--session", "opencode-session"]
+            vec!["opencode", "--auto", "--session", "opencode-session"]
         );
         assert_eq!(
             plan(
@@ -583,7 +645,12 @@ mod tests {
             )
             .unwrap()
             .argv,
-            vec!["qodercli", "--resume", "qoder-session"]
+            vec![
+                "qodercli",
+                "--dangerously-skip-permissions",
+                "--resume",
+                "qoder-session"
+            ]
         );
         assert_eq!(
             plan(
@@ -593,7 +660,7 @@ mod tests {
             )
             .unwrap()
             .argv,
-            vec!["qwen", "--resume", "qwen-session"]
+            vec!["qwen", "--yolo", "--resume", "qwen-session"]
         );
         assert_eq!(
             plan(
@@ -603,7 +670,7 @@ mod tests {
             )
             .unwrap()
             .argv,
-            vec!["kilo", "--session", "kilo-session"]
+            vec!["kilo", "--auto", "--session", "kilo-session"]
         );
         assert_eq!(
             plan(
@@ -619,6 +686,9 @@ mod tests {
                 } else {
                     "cursor-agent"
                 },
+                "--force",
+                "--sandbox",
+                "disabled",
                 "--resume",
                 "cursor-session",
             ]
@@ -631,7 +701,12 @@ mod tests {
             )
             .unwrap()
             .argv,
-            vec!["agy", "--conversation", "agy-session"]
+            vec![
+                "agy",
+                "--dangerously-skip-permissions",
+                "--conversation",
+                "agy-session"
+            ]
         );
         assert_eq!(
             plan(
@@ -641,7 +716,7 @@ mod tests {
             )
             .unwrap()
             .argv,
-            vec!["grok", "--resume", "grok-session"]
+            vec!["grok", "--always-approve", "--resume", "grok-session"]
         );
         assert_eq!(
             plan(
@@ -854,7 +929,16 @@ mod tests {
     fn ids_are_data_not_shell_text() {
         let id = "abc; rm -rf /";
         let codex_plan = plan("herdr:codex", "codex", &AgentSessionRef::id(id).unwrap()).unwrap();
-        assert_eq!(codex_plan.argv, vec!["codex", "--no-daemon", "resume", id]);
+        assert_eq!(
+            codex_plan.argv,
+            vec![
+                "codex",
+                "--no-daemon",
+                "--dangerously-bypass-approvals-and-sandbox",
+                "resume",
+                id
+            ]
+        );
 
         let copilot_plan = plan(
             "herdr:copilot",
@@ -862,10 +946,16 @@ mod tests {
             &AgentSessionRef::id(id).unwrap(),
         )
         .unwrap();
-        assert_eq!(copilot_plan.argv, vec!["copilot", "--resume=abc; rm -rf /"]);
+        assert_eq!(
+            copilot_plan.argv,
+            vec!["copilot", "--yolo", "--resume=abc; rm -rf /"]
+        );
 
         let devin_plan = plan("herdr:devin", "devin", &AgentSessionRef::id(id).unwrap()).unwrap();
-        assert_eq!(devin_plan.argv, vec!["devin", "--resume", id]);
+        assert_eq!(
+            devin_plan.argv,
+            vec!["devin", "--permission-mode", "dangerous", "--resume", id]
+        );
     }
 
     #[test]

@@ -238,7 +238,14 @@ impl App {
             return false;
         }
 
-        let Some(resume_command) = shell_command_from_argv(&plan.argv) else {
+        let command_argv = crate::harness::find(&plan.agent).map_or_else(
+            || Ok(plan.argv.clone()),
+            |harness| harness.scope_launch_environment(plan.argv.clone()),
+        );
+        let Some(resume_command) = command_argv
+            .ok()
+            .and_then(|argv| shell_command_from_argv(&argv))
+        else {
             tracing::warn!(
                 pane = pane_id.raw(),
                 terminal = %terminal_id,
