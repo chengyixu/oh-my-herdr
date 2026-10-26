@@ -117,6 +117,10 @@ It builds the product identity, refuses any binary that does not report
 `<version>-ohmyherdr.<version>` with its socket under `~/.config/ohmyherdr`,
 then publishes the GitHub Release and the npm package and verifies both.
 
+There is no hosted CI: GitHub Actions is disabled for this repository and
+verification runs locally. Dependency updates arrive through upstream Herdr
+merges, so the lockfile stays aligned with the upstream it integrates.
+
 ## license
 
 OhMyHerdr is licensed under the [Apache License 2.0](LICENSE).

@@ -6,7 +6,6 @@ __pycache__/
 *.swp
 *.swo
 *~
-.DS_Store
 
 /docs/*
 !/docs/next/
@@ -15,6 +14,8 @@ __pycache__/
 !/docs/preview/**
 !/docs/versions/
 !/docs/versions/**
+# After the docs re-includes: the last matching rule wins.
+.DS_Store
 /.local/
 /backlog
 
