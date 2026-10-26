@@ -1,246 +1,207 @@
-#![allow(dead_code)]
-
-use std::io;
+//! Per-launch native editor service. Its capability is bound to one pane,
+//! exact reported session and native foreground process, never a cwd guess.
+use super::native_context::NativeContextRegistration;
+use serde_json::{json, Value};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
-use std::sync::mpsc::{self, Receiver};
 
-use serde_json::{json, Value};
-
-use crate::pane::native_input::NativeInputEvidence;
-
-pub(crate) struct ManagedSourceLease {
-    pub directory: PathBuf,
-    pub lease_file: PathBuf,
-    pub configuration: Value,
-    pub baseline: NativeInputEvidence,
-    pub registration: Option<crate::integration::native_context::NativeContextRegistration>,
-    ready_probe: Option<Receiver<Result<(), String>>>,
-    pub ready: bool,
-    ready_error: Option<String>,
-    _process: Child,
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct NativeSourceHandoff {
+    pub(crate) directory: PathBuf,
+    pub(crate) helper_pid: u32,
+    pub(crate) input: crate::pane::native_input::NativeInputEvidence,
+    pub(crate) baseline: Option<crate::pane::native_input::NativeInputEvidence>,
 }
 
+pub(crate) struct ManagedSourceLease {
+    directory: PathBuf,
+    configuration: Value,
+    child: Option<Child>,
+    helper_pid: u32,
+    ownership: Option<crate::platform::StatusCommandGuard>,
+    owned: bool,
+}
 impl Drop for ManagedSourceLease {
     fn drop(&mut self) {
-        let _ = self._process.kill();
-        let _ = self._process.wait();
+        if !self.owned {
+            return;
+        }
+        if self.child.is_none() {
+            use std::os::unix::net::UnixStream;
+            if let Ok(mut stream) = UnixStream::connect(self.directory.join("native-context.sock"))
+            {
+                let _ = stream.set_write_timeout(Some(std::time::Duration::from_millis(100)));
+                let request = json!({"token":self.configuration["token"],"action":"shutdown"});
+                let _ = writeln!(stream, "{request}");
+            }
+            return;
+        }
+        if let Some(guard) = &mut self.ownership {
+            guard.terminate();
+        }
+        if let Some(child) = &mut self.child {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
         let _ = std::fs::remove_dir_all(&self.directory);
     }
 }
-
 impl ManagedSourceLease {
-    pub fn create(
-        agent: &str,
-        pane_id: &str,
-        cwd: &Path,
-        binary_path: &Path,
-        api_endpoint: &Path,
-        baseline: NativeInputEvidence,
-    ) -> io::Result<Self> {
-        let (directory, _) = super::native_process::private_directory()?;
-        let source_script = directory.join("source.py");
-        let script_content = include_str!("../integration/assets/native-context-service.py");
-        std::fs::write(&source_script, script_content)?;
-
-        let sock_path = directory.join("native-context.sock");
-        let lease_file = directory.join("lease.json");
-        let token = format!("{:x}", rand_u128());
-
-        let context = json!({
-            "agent": agent,
-            "pane_id": pane_id,
-            "session_id": "",
-            "session_path": "",
-            "process_id": 0,
-        });
-
-        let config = json!({
-            "endpoint": sock_path.to_string_lossy(),
-            "token": token,
-            "api_endpoint": api_endpoint.to_string_lossy(),
-            "binary": binary_path.to_string_lossy(),
-            "context": context,
-        });
-
-        write_config(&lease_file, &config)?;
-
-        let editor_script = directory.join("editor.sh");
-        let editor_content = format!(
-            "#!/bin/sh\nexec python3 '{}' editor --lease '{}' \"$@\"\n",
-            source_script.display(),
-            lease_file.display()
-        );
-        std::fs::write(&editor_script, editor_content)?;
-        set_executable(&editor_script)?;
-
-        let launch_script = directory.join("launch.sh");
-        let launch_content = format!(
-            "#!/bin/sh\nexport EDITOR=\"/bin/sh {}\"\nexport VISUAL=\"$EDITOR\"\nexec \"$@\"\n",
-            shell_word(&editor_script.to_string_lossy())
-        );
-        std::fs::write(&launch_script, launch_content)?;
-        set_executable(&launch_script)?;
-
-        let mut cmd = crate::noninteractive_process::command("python3");
-        cmd.args([
-            source_script.to_str().unwrap(),
-            "server",
-            "--lease",
-            lease_file.to_str().unwrap(),
-        ])
-        .current_dir(cwd)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-
-        super::native_process::isolate_from_pane(&mut cmd);
-        let child = cmd.spawn()?;
-
-        Ok(Self {
-            directory,
-            lease_file,
-            configuration: config,
+    pub(crate) fn handoff_state(
+        &self,
+        input: crate::pane::native_input::NativeInputEvidence,
+        baseline: Option<crate::pane::native_input::NativeInputEvidence>,
+    ) -> NativeSourceHandoff {
+        NativeSourceHandoff {
+            directory: self.directory.clone(),
+            helper_pid: self.helper_pid,
+            input,
             baseline,
-            registration: None,
-            ready_probe: None,
-            ready: false,
-            ready_error: None,
-            _process: child,
+        }
+    }
+    pub(crate) fn release_for_handoff(&mut self) {
+        if let Some(guard) = &mut self.ownership {
+            guard.release_for_handoff();
+        }
+        self.owned = false;
+    }
+    pub(crate) fn adopt_handoff(state: &NativeSourceHandoff) -> io::Result<Self> {
+        crate::platform::validate_private_context_endpoint(
+            &state.directory.join("native-context.sock"),
+        )?;
+        let configuration: Value =
+            serde_json::from_slice(&std::fs::read(state.directory.join("lease.json"))?)?;
+        Ok(Self {
+            directory: state.directory.clone(),
+            configuration,
+            child: None,
+            helper_pid: state.helper_pid,
+            ownership: None,
+            owned: false,
         })
     }
-
-    pub fn launch_argv(&self, original_argv: &[String]) -> Vec<String> {
-        let mut argv = vec![
-            "/bin/sh".to_string(),
+    pub(crate) fn assume_handoff_ownership(&mut self) -> io::Result<()> {
+        self.owned = true;
+        Ok(())
+    }
+    pub(crate) fn create(cwd: &Path) -> io::Result<Self> {
+        let (directory, _) = super::native_process::private_directory()?;
+        let result = (|| {
+            let script = directory.join("source.py");
+            std::fs::write(&script, include_bytes!("assets/native-context-service.py"))?;
+            let lease = directory.join("lease.json");
+            let mut entropy = [0u8; 32];
+            std::fs::File::open("/dev/urandom")?.read_exact(&mut entropy)?;
+            let token = entropy
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>();
+            let config = json!({"endpoint":directory.join("native-context.sock"),"token":token,
+                "api_endpoint":crate::api::socket_path(),"binary":std::env::current_exe()?,"cwd":cwd,"context":null});
+            write_config(&lease, &config)?;
+            let editor_path = directory.join("editor.sh");
+            std::fs::write(
+                &editor_path,
+                format!(
+                    "#!/bin/sh\nexec python3 {} editor --lease {} \"$@\" 2>>{}\n",
+                    word(&script.to_string_lossy()),
+                    word(&lease.to_string_lossy()),
+                    word(&directory.join("service.log").to_string_lossy())
+                ),
+            )?;
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&editor_path, std::fs::Permissions::from_mode(0o700))?;
+            let editor = editor_path.to_string_lossy();
+            let launcher=format!("#!/bin/sh\nexport OHMYHERDR_NATIVE_EDITOR_FALLBACK=\"${{VISUAL:-${{EDITOR:-vi}}}}\"\nexport VISUAL={}\nexport EDITOR=\"$VISUAL\"\nexec \"$@\"\n",word(&editor));
+            std::fs::write(directory.join("launch.sh"), launcher)?;
+            let mut command = crate::noninteractive_process::command("python3");
+            command
+                .arg(script)
+                .arg("server")
+                .arg("--lease")
+                .arg(&lease)
+                .current_dir(cwd)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            super::native_process::isolate_from_pane(&mut command);
+            crate::platform::configure_native_helper(&mut command)?;
+            let mut child = command.spawn()?;
+            let ownership = match crate::platform::native_helper_guard(&child) {
+                Ok(guard) => guard,
+                Err(error) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(error);
+                }
+            };
+            Ok(Self {
+                directory: directory.clone(),
+                configuration: config,
+                helper_pid: child.id(),
+                child: Some(child),
+                ownership: Some(ownership),
+                owned: true,
+            })
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_dir_all(directory);
+        }
+        result
+    }
+    pub(crate) fn launch_argv(&self, argv: &[String]) -> Vec<String> {
+        let mut result = vec![
+            "/bin/sh".into(),
             self.directory
                 .join("launch.sh")
                 .to_string_lossy()
                 .into_owned(),
         ];
-        argv.extend_from_slice(original_argv);
-        argv
+        result.extend_from_slice(argv);
+        result
     }
-
-    pub fn poll_ready(
+    pub(crate) fn activate(
         &mut self,
-        registration: &Option<crate::integration::native_context::NativeContextRegistration>,
-    ) -> io::Result<bool> {
-        if self.ready {
-            return Ok(true);
-        }
-        if let Some(err) = &self.ready_error {
-            return Err(io::Error::other(err.clone()));
-        }
-
-        if self.ready_probe.is_none() {
-            if let Some(reg) = registration {
-                self.registration = Some(reg.clone());
-                self.configuration["context"] = json!({
-                    "agent": reg.agent,
-                    "pane_id": reg.pane_id,
-                    "session_id": reg.session_id,
-                    "session_path": reg.session_path,
-                    "process_id": reg.process_id,
-                });
-                write_config(&self.lease_file, &self.configuration)?;
-
-                let (tx, rx) = mpsc::channel();
-                let sock_path = self.directory.join("native-context.sock");
-                let token = self.configuration["token"]
-                    .as_str()
-                    .unwrap_or("")
-                    .to_string();
-
-                std::thread::Builder::new()
-                    .name("native-target-ready".into())
-                    .spawn(move || {
-                        let res = probe_ready(&sock_path, &token);
-                        let _ = tx.send(res);
-                    })
-                    .map_err(io::Error::other)?;
-                self.ready_probe = Some(rx);
-            }
-        }
-
-        if let Some(rx) = &self.ready_probe {
-            match rx.try_recv() {
-                Ok(Ok(())) => {
-                    self.ready = true;
-                    self.ready_probe = None;
-                    Ok(true)
-                }
-                Ok(Err(err)) => {
-                    self.ready_error = Some(err.clone());
-                    Err(io::Error::other(err))
-                }
-                Err(mpsc::TryRecvError::Empty) => Ok(false),
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    let err = "native target readiness acknowledgement failed".to_string();
-                    self.ready_error = Some(err.clone());
-                    Err(io::Error::other(err))
-                }
-            }
-        } else {
-            Ok(false)
-        }
+        agent: &str,
+        pane: &str,
+        id: &str,
+        path: &Path,
+        process_id: u32,
+    ) -> io::Result<NativeContextRegistration> {
+        let registration = NativeContextRegistration {
+            agent: agent.into(),
+            source: format!("herdr:{agent}"),
+            pane_id: pane.into(),
+            session_id: id.into(),
+            session_path: path.to_string_lossy().into(),
+            process_id,
+            seq: 1,
+            version: 1,
+            endpoint: self.configuration["endpoint"]
+                .as_str()
+                .ok_or_else(|| io::Error::other("source endpoint missing"))?
+                .into(),
+            token: self.configuration["token"]
+                .as_str()
+                .ok_or_else(|| io::Error::other("source capability missing"))?
+                .into(),
+        };
+        self.configuration["binary"] = serde_json::to_value(std::env::current_exe()?)?;
+        self.configuration["context"] = serde_json::to_value(&registration)?;
+        write_config(&self.directory.join("lease.json"), &self.configuration)?;
+        Ok(registration)
     }
 }
-
-fn probe_ready(sock_path: &Path, token: &str) -> Result<(), String> {
-    use std::io::{Read, Write};
-    use std::os::unix::net::UnixStream;
-
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-    while std::time::Instant::now() < deadline {
-        if let Ok(mut stream) = UnixStream::connect(sock_path) {
-            let req = json!({
-                "token": token,
-                "action": "ready"
-            });
-            let mut bytes = serde_json::to_vec(&req).map_err(|e| e.to_string())?;
-            bytes.push(b'\n');
-            if stream.write_all(&bytes).is_ok() {
-                let mut resp = Vec::new();
-                let mut buf = [0u8; 1024];
-                if let Ok(n) = stream.read(&mut buf) {
-                    resp.extend_from_slice(&buf[..n]);
-                    if let Ok(val) = serde_json::from_slice::<Value>(&resp) {
-                        if val.get("ok").and_then(Value::as_bool) == Some(true) {
-                            return Ok(());
-                        }
-                    }
-                }
-            }
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-    Err("native target readiness acknowledgement failed".into())
+fn word(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
-
 fn write_config(path: &Path, config: &Value) -> io::Result<()> {
-    let bytes = serde_json::to_vec_pretty(config)?;
-    std::fs::write(path, bytes)
-}
-
-fn shell_word(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
-}
-
-fn set_executable(path: &Path) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
-    }
-    Ok(())
-}
-
-fn rand_u128() -> u128 {
-    use std::time::SystemTime;
-    let nanos = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or_default();
-    nanos ^ (std::process::id() as u128)
+    let pending = path.with_extension("pending");
+    let mut file = crate::platform::create_private_state_file(&pending)?;
+    serde_json::to_writer(&mut file, config)?;
+    file.write_all(b"\n")?;
+    file.sync_all()?;
+    drop(file);
+    std::fs::rename(pending, path)
 }

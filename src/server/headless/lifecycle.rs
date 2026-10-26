@@ -112,6 +112,17 @@ impl HeadlessServer {
                 .terminals
                 .get(terminal_id)
                 .and_then(|terminal| terminal.handoff_agent_state());
+            handoff_runtime.native_source =
+                self.app.managed_sources.get(terminal_id).map(|lease| {
+                    lease.handoff_state(
+                        runtime.native_input_evidence(),
+                        self.app
+                            .state
+                            .terminals
+                            .get(terminal_id)
+                            .and_then(|t| t.native_context_input_baseline),
+                    )
+                });
             let has_agent_session = self
                 .app
                 .state
@@ -234,6 +245,9 @@ impl HeadlessServer {
             return Err(err);
         }
 
+        for lease in self.app.managed_sources.values_mut() {
+            lease.release_for_handoff();
+        }
         for (terminal_id, runtime) in self.app.terminal_runtimes.drain_for_handoff() {
             if !pane_by_terminal.contains_key(&terminal_id) {
                 continue;

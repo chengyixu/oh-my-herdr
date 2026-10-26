@@ -39,6 +39,9 @@ pub(crate) struct HandoffRuntimeState {
     pub input_timing_captured_at_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_state: Option<crate::terminal::state::HandoffAgentState>,
+    /// Ephemeral private helper ownership; never stored in session snapshots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_source: Option<crate::integration::managed_source::NativeSourceHandoff>,
 }
 
 #[cfg(unix)]

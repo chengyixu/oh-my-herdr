@@ -422,6 +422,8 @@ struct AgentStartPreparation {
     bytes: Bytes,
     timeout: Duration,
     persisted_agent_session: Option<crate::agent_resume::PersistedAgentSession>,
+    #[cfg(unix)]
+    native_source: Option<crate::integration::managed_source::ManagedSourceLease>,
 }
 
 impl App {
@@ -635,6 +637,19 @@ impl App {
             .ok_or("the original terminal changed")?
             .cwd
             .clone();
+        #[cfg(unix)]
+        let native_source = if kind.harness().native_editor_controls().is_some() {
+            Some(
+                crate::integration::managed_source::ManagedSourceLease::create(&cwd)
+                    .map_err(|e| e.to_string())?,
+            )
+        } else {
+            None
+        };
+        #[cfg(unix)]
+        let argv = native_source
+            .as_ref()
+            .map_or_else(|| argv.clone(), |lease| lease.launch_argv(&argv));
         let command = if let Some((target, source)) = binding {
             crate::platform::interactive_shell_command_with_env_in_cwd(
                 &argv, &shell, &cwd, &target, &source,
@@ -662,6 +677,14 @@ impl App {
         runtime
             .try_send_bytes(Bytes::from(bytes))
             .map_err(|error| error.to_string())?;
+        terminal.native_context_input_baseline = Some(runtime.native_input_evidence());
+        #[cfg(unix)]
+        {
+            self.managed_sources.remove(&terminal_id);
+            if let Some(lease) = native_source {
+                self.managed_sources.insert(terminal_id, lease);
+            }
+        }
         self.state.mark_session_dirty();
         self.schedule_session_save();
         Ok(())
@@ -770,6 +793,22 @@ impl App {
             .harness()
             .scope_launch_environment(argv.clone())
             .map_err(|_| AgentStartError::InvalidArgument)?;
+        #[cfg(unix)]
+        let native_source = if kind.harness().native_editor_controls().is_some() {
+            Some(
+                crate::integration::managed_source::ManagedSourceLease::create(
+                    cwd.unwrap_or(&terminal.cwd),
+                )
+                .map_err(|e| AgentStartError::InputFailed(e.to_string()))?,
+            )
+        } else {
+            None
+        };
+        #[cfg(unix)]
+        let command_argv = native_source.as_ref().map_or_else(
+            || command_argv.clone(),
+            |lease| lease.launch_argv(&command_argv),
+        );
         let command = match (cwd, env_binding.as_ref()) {
             (Some(cwd), Some((target, source))) => {
                 crate::platform::interactive_shell_command_with_env_in_cwd(
@@ -800,6 +839,8 @@ impl App {
             bytes: Bytes::from(bytes),
             timeout,
             persisted_agent_session,
+            #[cfg(unix)]
+            native_source,
         })
     }
 
@@ -830,6 +871,15 @@ impl App {
             terminal.clear_agent_name();
             return Err(AgentStartError::InputFailed(err.to_string()));
         }
+        #[cfg(unix)]
+        {
+            self.managed_sources.remove(&preparation.terminal_id);
+            if let Some(lease) = preparation.native_source {
+                self.managed_sources
+                    .insert(preparation.terminal_id.clone(), lease);
+            }
+        }
+        terminal.native_context_input_baseline = Some(runtime.native_input_evidence());
         if let Some(session) = preparation.persisted_agent_session {
             terminal.set_managed_agent_launch_session(session);
         }

@@ -2192,6 +2192,7 @@ impl PaneRuntime {
                     .min(u128::from(u64::MAX)) as u64,
             ),
             agent_state: None,
+            native_source: None,
         }
     }
 
@@ -2403,6 +2404,7 @@ impl PaneRuntime {
             terminal_title,
             initial_history_ansi,
             agent_state: _,
+            native_source,
             child_session_id: _,
             has_received_input,
             last_input_age_ms,
@@ -2556,7 +2558,12 @@ impl PaneRuntime {
                 ))
             })),
             input_received: Cell::new(has_received_input),
-            native_input: Cell::new(native_input::NativeInputEvidence::restored_unknown()),
+            native_input: Cell::new(
+                native_source
+                    .as_ref()
+                    .map(|s| s.input)
+                    .unwrap_or_else(native_input::NativeInputEvidence::restored_unknown),
+            ),
             current_size: Cell::new((rows, cols, cell_width_px, cell_height_px)),
             child_pid,
             reported_cwd,

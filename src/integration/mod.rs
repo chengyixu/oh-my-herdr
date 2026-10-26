@@ -6,6 +6,7 @@ mod config_file;
 mod env;
 mod file_ops;
 pub(crate) mod harness_catalog;
+#[cfg(unix)]
 pub(crate) mod managed_source;
 mod native_acp;
 pub(crate) mod native_context;

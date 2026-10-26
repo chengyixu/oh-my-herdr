@@ -20,6 +20,8 @@ import threading
 import time
 import select
 import selectors
+import sqlite3
+import contextlib
 
 MAX_BYTES = 256 * 1024 * 1024
 
@@ -70,7 +72,7 @@ def editor(lease, buffer):
         if not command:
             raise RuntimeError('neither VISUAL nor EDITOR was configured')
         return subprocess.call(command+[buffer])
-    if response.get('ok'):
+    if response.get('ok') or response.get('preserve'):
         return 0
     raise RuntimeError('native editor bridge refused the operation; draft file unchanged')
 
@@ -134,6 +136,8 @@ class ContextServer:
         self.owner_pid = None
         self.stopped = threading.Event()
         self.wake = None
+        self.close_started = False
+        self.inspection_input = None
 
     def monitor_source(self, config):
         context = config.get('context')
@@ -168,7 +172,11 @@ class ContextServer:
                 raise RuntimeError('source_busy: native context export already active')
             inspection = app_control(config, 'inspect')
             if not inspection['queue_unchanged']:
-                raise RuntimeError('source_has_unacknowledged_input: native queue/attachments are not proven empty')
+                evidence=inspection['input']
+                if not evidence['known'] or evidence['uncertain_attachment_epoch'] is not None:
+                    raise RuntimeError('source_has_unacknowledged_input: native attachments/controls are not proven empty')
+                self.prove_native_queue_empty(config)
+            self.inspection_input=inspection['input']
             self.armed, self.release, self.editor_ready, self.editor_error = True, False, False, None
             self.editor_done.clear()
         try:
@@ -179,6 +187,7 @@ class ContextServer:
                 if self.editor_error:
                     raise RuntimeError(self.editor_error)
             value = self.capture(config)
+            self.prove_native_queue_empty(config)
             digest = hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',',':')).encode()).hexdigest()
             with self.condition:
                 self.snapshot_id = digest
@@ -187,13 +196,42 @@ class ContextServer:
             self.release_editor()
             raise
 
+    def prove_native_queue_empty(self, config):
+        context=config['context']
+        path=pathlib.Path(context['session_path'])
+        if context['agent']=='codex':
+            sessions=next((p for p in path.parents if p.name=='sessions'),None)
+            if sessions is None:
+                raise RuntimeError('source_has_unacknowledged_input: native queue location unavailable')
+            database=sessions.parent/'queue_1.sqlite'
+            if not database.is_file():
+                raise RuntimeError('source_has_unacknowledged_input: native queue contract unavailable')
+            with contextlib.closing(sqlite3.connect(database.as_uri()+'?mode=ro',uri=True,timeout=1)) as connection:
+                pending=connection.execute('SELECT count(*) FROM queued_items WHERE thread_id=?',(context['session_id'],)).fetchone()[0]
+            if pending:
+                raise RuntimeError('source_busy: native session has queued messages')
+        else:
+            pending=[]
+            for line in path.read_text().splitlines():
+                row=json.loads(line)
+                if row.get('type')!='queue-operation':continue
+                operation=row.get('operation')
+                if operation=='enqueue':pending.append(row)
+                elif operation=='dequeue':
+                    if pending:pending.pop(0)
+                elif operation=='popAll':pending.clear()
+                else:raise RuntimeError('source_has_unacknowledged_input: unknown native queue operation')
+            if pending:raise RuntimeError('source_busy: native session has queued messages')
+
     def capture(self, config):
         context = config['context']
         result = subprocess.run([config['binary'],'__native-context','snapshot',context['agent'],
-                                 context['session_path'],context['session_id']],
+                                 context['session_path'],context['session_id'],config['cwd']],
                                 stdin=subprocess.DEVNULL,capture_output=True,timeout=10)
         if result.returncode or len(result.stdout)>MAX_BYTES:
-            raise RuntimeError('native_context_unavailable: native source history could not be exported')
+            try:reason=json.loads(result.stdout).get('error','native source history could not be exported')
+            except (ValueError,TypeError):reason='native source history could not be exported'
+            raise RuntimeError('native_context_unavailable: '+str(reason)[:512])
         return json.loads(result.stdout)
 
     def release_editor(self):
@@ -233,7 +271,7 @@ class ContextServer:
         deadline=time.monotonic()+3
         while time.monotonic()<deadline:
             state=app_control(config,'inspect')
-            if not state['queue_unchanged']:
+            if any(state['input'][key]!=self.inspection_input[key] for key in ('potential_submission_epoch','uncertain_attachment_epoch')):
                 raise RuntimeError('source_changed: native input changed during editor release')
             if state['output_seq']!=before:return
             threading.Event().wait(.02)
@@ -243,8 +281,12 @@ class ContextServer:
         config=self.configuration()
         if not hmac.compare_digest(str(command.get('token','')),config['token']):
             raise RuntimeError('context_not_authorized: native capability mismatch')
-        self.monitor_source(config)
         action=command.get('action')
+        if action=='shutdown':
+            self.stopped.set()
+            if self.wake:self.wake.sendall(b'x')
+            return {'ok':True}
+        self.monitor_source(config)
         if action=='editor':
             return self.handle_editor(config,command)
         if action=='ready':
@@ -254,15 +296,27 @@ class ContextServer:
         if action=='snapshot':
             return self.snapshot(config)
         if action=='release':
-            self.release_editor()
+            if self.editor_pid is not None:
+                self.release_and_wait_frontend(config)
+            else:self.release_editor()
             return {'ok':True}
         if action=='close':
             value=self.capture(config)
+            self.prove_native_queue_empty(config)
             digest=hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':')).encode()).hexdigest()
             if digest != command.get('snapshot_id') or digest != self.snapshot_id:
                 self.release_editor()
                 raise RuntimeError('source_changed: native context changed before close')
             self.release_and_wait_frontend(config)
+            late=self.capture(config)
+            late_digest=hashlib.sha256(json.dumps(late,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+            self.prove_native_queue_empty(config)
+            if late_digest!=digest:
+                raise RuntimeError('source_changed: native context changed during frontend release')
+            with self.condition:
+                if self.close_started:
+                    raise RuntimeError('native_close_already_requested: native exit is never repeated')
+                self.close_started=True
             app_control(config,'exit')
             return {'ok':True,'closing':True}
         raise RuntimeError('native_context_unavailable: unknown native context operation')
@@ -299,13 +353,9 @@ class ContextServer:
         selector=selectors.DefaultSelector()
         selector.register(listener,selectors.EVENT_READ,'listener')
         selector.register(wake_read,selectors.EVENT_READ,'wake')
-        deadline=time.monotonic()+30
-        self.monitor_source(config)
         try:
             while not self.stopped.is_set():
-                timeout=None if self.owner_pid is not None else max(0,deadline-time.monotonic())
-                events=selector.select(timeout)
-                if not events and self.owner_pid is None:break
+                events=selector.select(None)
                 for key,_ in events:
                     if key.data=='wake':
                         wake_read.recv(4096)

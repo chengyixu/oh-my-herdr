@@ -95,7 +95,7 @@ impl NativeContextRegistration {
         let mut stream = crate::ipc::connect_local_stream(Path::new(&self.endpoint))
             .map_err(NativeContextError::transport)?;
         stream
-            .set_recv_timeout(Some(Duration::from_secs(10)))
+            .set_recv_timeout(Some(Duration::from_secs(25)))
             .map_err(NativeContextError::transport)?;
         stream
             .set_send_timeout(Some(Duration::from_secs(5)))
@@ -158,6 +158,20 @@ impl NativeContextRegistration {
             });
         }
         Ok((id, snapshot))
+    }
+
+    pub(crate) fn release(&self) {
+        let _ = self.request("release", None);
+    }
+
+    pub(crate) fn ready(&self) -> Result<(), NativeContextError> {
+        let response = self.request("ready", None)?;
+        if response["ready"] != true {
+            return Err(NativeContextError::transport(
+                "native prompt not acknowledged",
+            ));
+        }
+        Ok(())
     }
 
     pub(crate) fn close_if_unchanged(&self, snapshot_id: &str) -> Result<(), NativeContextError> {

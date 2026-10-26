@@ -20,6 +20,7 @@ enum Stage {
     Closing(Receiver<Result<(), NativeContextError>>),
     SourceShell,
     TargetReady,
+    Releasing(Receiver<()>),
 }
 pub(crate) struct PendingReplacement {
     id: String,
@@ -38,6 +39,10 @@ pub(crate) struct PendingReplacement {
     deadline: Instant,
     args: Vec<String>,
     binding: Option<(String, String)>,
+    readiness: Option<Receiver<Result<(), NativeContextError>>>,
+    failure: Option<NativeContextError>,
+    cleanup_started: bool,
+    recover_source: bool,
 }
 
 fn exchange_error(code: &str, message: impl Into<String>) -> NativeContextError {
@@ -221,6 +226,28 @@ impl App {
                 return encode_error(id, "pane_not_found", "native source terminal was not found")
             }
         };
+        if self
+            .agent_info(ws, pane)
+            .and_then(|a| a.agent_session)
+            .is_none_or(|s| {
+                s.agent != params.context.agent
+                    || s.source != params.context.source
+                    || match s.kind {
+                        crate::agent_resume::AgentSessionRefKind::Id => {
+                            s.value != params.context.session_id
+                        }
+                        crate::agent_resume::AgentSessionRefKind::Path => {
+                            s.value != params.context.session_path
+                        }
+                    }
+            })
+        {
+            return encode_error(
+                id,
+                "source_changed",
+                "the native session changed before control",
+            );
+        }
         let terminal = match self.state.terminals.get(&terminal_id) {
             Some(t) => t,
             None => {
@@ -238,6 +265,21 @@ impl App {
             Some(r) => r,
             None => return encode_error(id, "pane_not_found", "native source runtime disappeared"),
         };
+        if !runtime
+            .child_pid()
+            .and_then(crate::detect::foreground_job)
+            .is_some_and(|job| {
+                job.processes
+                    .iter()
+                    .any(|p| p.pid == params.context.process_id)
+            })
+        {
+            return encode_error(
+                id,
+                "native_context_not_owned",
+                "native source process no longer owns the pane",
+            );
+        }
         let harness = match crate::harness::find(&params.context.agent) {
             Some(h) => h,
             None => return encode_error(id, "invalid_agent_kind", "unknown native integration"),
@@ -261,6 +303,13 @@ impl App {
                 )
             }
             crate::api::schema::agents::AgentContextControlAction::OpenEditor => {
+                if !terminal.native_replacement_input_paused {
+                    return encode_error(
+                        id,
+                        "native_control_unfenced",
+                        "native editor requires an active replacement",
+                    );
+                }
                 let Some(controls) = harness.native_editor_controls() else {
                     return encode_error(
                         id,
@@ -268,7 +317,14 @@ impl App {
                         "this source has no qualified editor/exit controls",
                     );
                 };
-                let _ = runtime.try_send_bytes(bytes::Bytes::from_static(controls.0.as_bytes()));
+                let sent = runtime.try_send_bytes(bytes::Bytes::from_static(controls.0.as_bytes()));
+                if sent.is_err() {
+                    return encode_error(
+                        id,
+                        "native_control_failed",
+                        "native editor input was not queued",
+                    );
+                }
                 encode_success(id, ResponseResult::Ok {})
             }
             crate::api::schema::agents::AgentContextControlAction::Exit => {
@@ -279,7 +335,23 @@ impl App {
                         "this source has no qualified editor/exit controls",
                     );
                 };
-                let _ = runtime.try_send_bytes(bytes::Bytes::from_static(controls.1.as_bytes()));
+                if !terminal.native_replacement_input_paused {
+                    return encode_error(
+                        id,
+                        "native_control_unfenced",
+                        "native close requires an active replacement",
+                    );
+                }
+                if runtime
+                    .try_send_bytes(bytes::Bytes::from_static(controls.1.as_bytes()))
+                    .is_err()
+                {
+                    return encode_error(
+                        id,
+                        "native_control_failed",
+                        "native exit input was not queued",
+                    );
+                }
                 encode_success(id, ResponseResult::Ok {})
             }
         }
@@ -371,7 +443,18 @@ impl App {
                     "install and activate the target integration first",
                 ));
             }
-            let export=terminal.native_context.clone().ok_or_else(||exchange_error("native_context_unavailable","the running integration cannot export its exact native context. Install the updated integration and reload it in this same native session before switching. No pane or session was changed"))?;
+            let managed_export = self.ensure_managed_native_context(&terminal_id, &pane)?;
+            let terminal = self.state.terminals.get(&terminal_id).ok_or_else(|| {
+                exchange_error("agent_switch_stale", "the selected terminal disappeared")
+            })?;
+            let export=managed_export.or_else(||terminal.native_context.clone()).ok_or_else(|| {
+                let message=if info.agent.as_deref().and_then(crate::harness::find).is_some_and(|h|h.native_editor_controls().is_some()) {
+                    "This running process did not inherit the native context service. Finish its turn, preserve any draft, then resume this exact session through a managed launch once. No pane or session was changed"
+                }else{
+                    "The running integration cannot export its exact native context. Install the updated integration and reload it in this same native session before switching. No pane or session was changed"
+                };
+                exchange_error("native_context_unavailable",message)
+            })?;
             let shell_pid = self
                 .terminal_runtimes
                 .get(&terminal_id)
@@ -460,6 +543,10 @@ impl App {
                 deadline: Instant::now() + Duration::from_secs(30),
                 args: Vec::new(),
                 binding: None,
+                readiness: None,
+                failure: None,
+                cleanup_started: false,
+                recover_source: false,
             })
         })();
         match plan {
@@ -498,10 +585,40 @@ impl App {
                 }
                 Ok(None) => self.pending_harness_replacements.push(plan),
                 Err(error) => {
+                    if !plan.cleanup_started {
+                        plan.recover_source = !matches!(plan.stage, Stage::Preparing(_));
+                        let export = plan.source_export.clone();
+                        let target = self
+                            .state
+                            .terminals
+                            .get(&plan.terminal)
+                            .and_then(|t| t.native_context.clone())
+                            .filter(|r| r != &export);
+                        let (tx, rx) = std::sync::mpsc::channel();
+                        if std::thread::Builder::new()
+                            .name("native-context-release".into())
+                            .spawn(move || {
+                                export.release();
+                                if let Some(target) = target {
+                                    target.release();
+                                }
+                                let _ = tx.send(());
+                            })
+                            .is_ok()
+                        {
+                            plan.failure = Some(error);
+                            plan.cleanup_started = true;
+                            plan.stage = Stage::Releasing(rx);
+                            plan.deadline = now + Duration::from_secs(40);
+                            self.pending_harness_replacements.push(plan);
+                            continue;
+                        }
+                    }
+                    let error = plan.failure.take().unwrap_or(error);
                     // Never send exit keys to a target which failed or needs input.
                     // If the original shell is available, recover the exact source
                     // snapshot; otherwise retain both native files and surface error.
-                    if !matches!(plan.stage, Stage::Preparing(_))
+                    if plan.recover_source
                         && self
                             .terminal_runtimes
                             .get(&plan.terminal)
@@ -612,16 +729,18 @@ impl App {
                 prepared.imported.retain_for_recovery();
                 // Recover the exact selected branch, even if the source file later
                 // moved its active leaf. The original source file remains intact.
-                plan.source.session_ref = AgentSessionRef::path(
-                    prepared
-                        .imported
-                        .source_archive
-                        .to_string_lossy()
-                        .into_owned(),
-                )
-                .ok_or_else(|| {
-                    exchange_error("native_import_failed", "invalid source recovery path")
-                })?;
+                if plan.source.agent == "pi" {
+                    plan.source.session_ref = AgentSessionRef::path(
+                        prepared
+                            .imported
+                            .source_archive
+                            .to_string_lossy()
+                            .into_owned(),
+                    )
+                    .ok_or_else(|| {
+                        exchange_error("native_import_failed", "invalid source recovery path")
+                    })?;
+                }
                 if let Some(terminal) = self.state.terminals.get_mut(&plan.terminal) {
                     terminal.native_replacement_recovery_session = Some(plan.source.clone());
                 }
@@ -681,6 +800,15 @@ impl App {
                 plan.stage = Stage::TargetReady;
                 plan.deadline = now + Duration::from_secs(35);
             }
+            Stage::Releasing(receiver) => match receiver.try_recv() {
+                Err(TryRecvError::Empty) => return Ok(None),
+                _ => {
+                    return Err(exchange_error(
+                        "native_switch_cancelled",
+                        "native context preparation stopped",
+                    ))
+                }
+            },
             Stage::TargetReady => {
                 let target = plan.target.as_ref().ok_or_else(|| {
                     exchange_error("native_launch_failed", "target identity missing")
@@ -701,6 +829,52 @@ impl App {
                         .is_none_or(|session| session.value != target.session_ref.value)
                     || !crate::api::agent_accepts_handoff_input(&agent)
                 {
+                    return Ok(None);
+                }
+                let target_context =
+                    self.ensure_managed_native_context(&plan.terminal, &plan.pane)?;
+                let target = plan
+                    .target
+                    .as_ref()
+                    .ok_or_else(|| exchange_error("native_launch_failed", "target disappeared"))?;
+                if let Some(receiver) = &plan.readiness {
+                    match receiver.try_recv() {
+                        Ok(result) => result.map_err(|error| {
+                            exchange_error(
+                                "native_target_not_ready",
+                                format!(
+                                    "The target did not acknowledge a native prompt: {}",
+                                    error.message
+                                ),
+                            )
+                        })?,
+                        Err(TryRecvError::Empty) => return Ok(None),
+                        Err(_) => {
+                            return Err(exchange_error(
+                                "native_launch_failed",
+                                "native readiness probe stopped",
+                            ))
+                        }
+                    }
+                } else if crate::harness::find(&target.agent)
+                    .is_some_and(|h| h.native_context_version().is_some())
+                {
+                    let Some(context) = target_context else {
+                        return Ok(None);
+                    };
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    std::thread::Builder::new()
+                        .name("native-target-ready".into())
+                        .spawn(move || {
+                            let result = if context.agent == "pi" {
+                                context.snapshot().map(|_| ())
+                            } else {
+                                context.ready()
+                            };
+                            let _ = tx.send(result);
+                        })
+                        .map_err(|e| exchange_error("native_launch_failed", e.to_string()))?;
+                    plan.readiness = Some(rx);
                     return Ok(None);
                 }
                 self.update_agent_registry(|registry| {

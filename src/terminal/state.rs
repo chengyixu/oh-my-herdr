@@ -2198,17 +2198,20 @@ impl TerminalState {
     }
 
     pub fn managed_agent_launch_pending(&self) -> bool {
-        self.managed_agent.is_some_and(|managed| {
-            matches!(
-                managed.phase,
-                ManagedAgentPhase::Pending { .. } | ManagedAgentPhase::Blocked
-            )
-        })
+        self.pending_agent_resume_plan.is_some()
+            || self.managed_agent.is_some_and(|managed| {
+                matches!(
+                    managed.phase,
+                    ManagedAgentPhase::Pending { .. } | ManagedAgentPhase::Blocked
+                )
+            })
     }
 
     pub fn managed_agent_interactive_ready(&self) -> bool {
-        self.managed_agent
-            .is_some_and(|managed| matches!(managed.phase, ManagedAgentPhase::Active))
+        self.pending_agent_resume_plan.is_none()
+            && self
+                .managed_agent
+                .is_some_and(|managed| matches!(managed.phase, ManagedAgentPhase::Active))
     }
 
     pub fn observe_codex_prompt_ready(&mut self, ready: bool) -> Option<TerminalStateMutation> {
@@ -2512,6 +2515,22 @@ mod tests {
 
     fn test_terminal() -> TerminalState {
         TerminalState::new(TerminalId::alloc(), "/tmp".into())
+    }
+
+    #[test]
+    fn cold_resume_metadata_is_not_an_interactive_prompt() {
+        let mut terminal = test_terminal();
+        terminal.restore_managed_agent(
+            "restored".into(),
+            Agent::Codex,
+            Some("exact-instance".into()),
+        );
+        let reference = crate::agent_resume::AgentSessionRef::id("source-id").unwrap();
+        terminal.pending_agent_resume_plan =
+            crate::agent_resume::plan("herdr:codex", "codex", &reference);
+        assert!(terminal.pending_agent_resume_plan.is_some());
+        assert!(!terminal.managed_agent_interactive_ready());
+        assert!(terminal.managed_agent_launch_pending());
     }
 
     #[test]

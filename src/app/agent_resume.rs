@@ -242,6 +242,27 @@ impl App {
             || Ok(plan.argv.clone()),
             |harness| harness.scope_launch_environment(plan.argv.clone()),
         );
+        #[cfg(unix)]
+        let native_source = if crate::harness::find(&plan.agent)
+            .is_some_and(|h| h.native_editor_controls().is_some())
+            && cwd.is_dir()
+        {
+            match crate::integration::managed_source::ManagedSourceLease::create(&cwd) {
+                Ok(lease) => Some(lease),
+                Err(error) => {
+                    tracing::warn!(%error,"native context helper unavailable during resume");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        #[cfg(unix)]
+        let command_argv = command_argv.map(|argv| {
+            native_source
+                .as_ref()
+                .map_or_else(|| argv.clone(), |lease| lease.launch_argv(&argv))
+        });
         let Some(resume_command) = command_argv
             .ok()
             .and_then(|argv| shell_command_from_argv(&argv))
@@ -316,10 +337,35 @@ impl App {
             return false;
         }
 
+        if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
+            terminal.native_context_input_baseline = Some(runtime.native_input_evidence());
+        }
+        #[cfg(unix)]
+        if let Some(lease) = native_source {
+            self.managed_sources.insert(terminal_id.clone(), lease);
+        }
         self.terminal_runtimes.insert(terminal_id.clone(), runtime);
         if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
             terminal.pending_agent_resume_plan = None;
             terminal.respawn_shell_on_exit = false;
+            if let (Some(name), Some(kind)) = (
+                terminal.agent_name.clone(),
+                crate::detect::parse_agent_label(&plan.agent),
+            ) {
+                let instance = terminal.live_roster_instance_id().map(str::to_owned);
+                let session = terminal.persisted_agent_session.clone();
+                terminal.begin_managed_agent(
+                    name,
+                    kind,
+                    instance,
+                    Instant::now(),
+                    super::agents::AGENT_START_SETTLE_DELAY,
+                    std::time::Duration::from_secs(30),
+                );
+                if let Some(session) = session {
+                    terminal.set_managed_agent_launch_session(session);
+                }
+            }
         }
         true
     }

@@ -39,6 +39,11 @@ parser.add_argument(
     "--compacted-source", action="store_true",
     help="Qualify full recorded history separately from the native active-context checkpoint",
 )
+parser.add_argument("--chain", default="codex", help="Comma-separated target sequence after Pi, e.g. codex,claude,pi")
+parser.add_argument("--local-protocol-fixture", action="store_true", help="Use task-owned native homes and local API capture; operator provider/auth remain untouched")
+parser.add_argument("--exercise-turns", action="store_true", help="Send a native model turn through the local fixture before each switch")
+parser.add_argument("--handoff-between-switches", action="store_true", help="Handoff the server while Codex is running, then continue the native chain")
+parser.add_argument("--restart-between-switches", action="store_true", help="Cold-restart the task-owned server after Codex starts, then continue switching")
 options = parser.parse_args()
 if options.compacted_source and (options.empty_source or options.verify_model_recall):
     parser.error("compacted-source qualification uses its own active-context markers")
@@ -202,6 +207,35 @@ env.update(
     HERDR_SESSION=name,
     SHELL="/bin/sh",
 )
+fixture = None
+if options.local_protocol_fixture:
+    from native_protocol_fixture import NativeFixture
+    fixture=NativeFixture()
+    native=base/"native"; native.mkdir()
+    codex_home=native/"codex"; codex_home.mkdir()
+    claude_home=native/"claude"; claude_home.mkdir()
+    pi_home=native/"pi"; pi_home.mkdir()
+    (pi_home/"settings.json").write_text(json.dumps({"defaultProvider":"openai","defaultModel":"gpt-4o","quietStartup":True}))
+    (pi_home/"extensions").mkdir()
+    shutil.copyfile(extension,pi_home/"extensions/herdr-agent-state.ts")
+    (codex_home/"config.toml").write_text(
+        'model_provider="capture"\nmodel="fixture-model"\n[features]\nhooks=true\n[model_providers.capture]\nname="Task-owned local capture"\n'
+        f'base_url="{fixture.url}/v1"\nwire_api="responses"\nrequires_openai_auth=false\nsupports_websockets=false\n')
+    (claude_home/".claude.json").write_text(json.dumps({"hasCompletedOnboarding":True,"bypassPermissionsModeAccepted":True,"customApiKeyResponses":{"approved":["task-owned-fixture"],"rejected":[]},
+        "projects":{str(base.resolve()):{"hasTrustDialogAccepted":True,"hasCompletedProjectOnboarding":True}}}))
+    env.update(CODEX_HOME=str(codex_home),CLAUDE_CONFIG_DIR=str(claude_home),PI_CODING_AGENT_DIR=str(pi_home),
+               ANTHROPIC_BASE_URL=fixture.url,ANTHROPIC_API_KEY="task-owned-fixture",ANTHROPIC_MODEL="claude-sonnet-4-6",
+               CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1",NO_PROXY="127.0.0.1,localhost")
+    for key in ["ANTHROPIC_AUTH_TOKEN","CLAUDE_CODE_OAUTH_TOKEN","OPENAI_API_KEY","CODEX_API_KEY"]:env.pop(key,None)
+    # Vetted task-owned hooks only; native Codex 0.164 has a separate hook-trust prompt.
+    fixture_bin=base/"fixture-bin"; fixture_bin.mkdir()
+    native_codex=shutil.which("codex")
+    (fixture_bin/"codex").write_text('#!/bin/sh\nexec '+shlex.quote(native_codex)+' --dangerously-bypass-hook-trust "$@"\n')
+    (fixture_bin/"codex").chmod(0o700)
+    env["PATH"]=str(fixture_bin)+os.pathsep+env["PATH"]
+    for integration in ["codex","claude"]:
+        install=subprocess.run([str(binary),"integration","install",integration],env=env,capture_output=True,text=True,timeout=15)
+        assert install.returncode==0,install.stderr
 if options.fail_target_launch:
     shim = base / "bin"
     shim.mkdir()
@@ -232,6 +266,7 @@ server = subprocess.Popen(
 )
 client = None
 report = {"base": str(base), "source_session": source_id, "source_hash": source_hash}
+restore_observer=None
 
 
 def api(method, params={}, expected_error=None):
@@ -428,6 +463,9 @@ try:
                     text, o = decodestr(d, o)
                     boot = json.loads(text)["boot_id"]
                     break
+        if "client_shell.surface.set" in welcome["methods"]:
+            active=endpoint("client_shell.surface.set",{"active":True})
+            assert "error" not in active,active
 
     if not options.handoff_from:
         connect_client()
@@ -683,6 +721,87 @@ try:
         assert recalled, "the native model did not recall both full-history markers"
         report["native_model_recall_verified"] = True
         report["native_model_reply"] = recalled
+    report["chain"] = []
+    report["native_context_proofs"] = []
+    def verify_target_context(target):
+        if not fixture:return
+        from verify_native_target_context import qualify
+        checkpoint=json.loads((api_path.parent/"agents.json").read_text())["native_harness_recovery"][instance]
+        required=["COMPACTED-CURRENT-CONTEXT","COMPACTED-SOURCE-SUMMARY"] if options.compacted_source else [oldest_marker,tool_marker]
+        excluded=[oldest_marker,tool_marker,"EXCLUDED-DIAGNOSTIC"] if options.compacted_source else []
+        report["native_context_proofs"].append(qualify(target,checkpoint["target_path"],base,env,fixture,required,excluded))
+        if options.exercise_turns and target != "pi":
+            start=len(fixture.requests)
+            api("agent.prompt",{"target":pane,"text":"Without tools, reply CAPTURED."})
+            deadline=time.monotonic()+25
+            while time.monotonic()<deadline:
+                screen=api("pane.read",{"pane_id":pane,"source":"detection","lines":20})["read"]["text"]
+                output_seen=("• CAPTURED" in screen or "⏺ CAPTURED" in screen)
+                if output_seen and len(fixture.requests)>start:break
+                time.sleep(.1)
+            assert len(fixture.requests)>start and output_seen,screen
+            api("agent.ready.wait",{"target":pane,"timeout_ms":15000})
+            report.setdefault("native_tui_turns",[]).append(target)
+    verify_target_context("codex")
+    if options.handoff_between_switches:
+        client.close();client=None
+        live_handoff();connect_client()
+    if options.restart_between_switches:
+        old_session=api("agent.get",{"target":pane})["agent"]["agent_session"]
+        client.close();client=None
+        api("server.stop");server.wait(timeout=15)
+        server=subprocess.Popen([str(binary),"--session",name,"server"],env=env,stdin=subprocess.DEVNULL,stdout=log,stderr=log)
+        deadline=time.monotonic()+15
+        while time.monotonic()<deadline:
+            if client_path.exists():
+                try:
+                    connect_client();break
+                except (ConnectionRefusedError,FileNotFoundError):pass
+            time.sleep(.1)
+        assert client is not None,"restart client unavailable"
+        focused=endpoint("pane.focus",{"pane_id":pane})
+        assert "error" not in focused,focused
+        restore_observer=subprocess.Popen([str(binary),"--session",name,"terminal","session","observe",pane,"--cols","150","--rows","45"],env=env,stdin=subprocess.DEVNULL,stdout=(base/"restore-observer.log").open("w"),stderr=subprocess.STDOUT)
+        deadline=time.monotonic()+20
+        while time.monotonic()<deadline:
+            try:
+                api("pane.process_info",{"pane_id":pane});break
+            except RuntimeError:time.sleep(.1)
+        api("agent.ready.wait",{"target":pane,"timeout_ms":30000})
+        restored=api("agent.get",{"target":pane})["agent"]
+        assert restored["agent_session"]==old_session,restored
+        terminal=restored["terminal_id"];report["terminal"]=terminal
+        report["cold_restart_verified"]=True
+    for target in options.chain.split(","):
+        if target == "codex" and not report["chain"]:
+            report["chain"].append({"target":"codex","result":report["replacement"]})
+            continue
+        assert target in {"pi","codex","claude"}, target
+        api("integration.harness.set", {"target":target,"active":True})
+        identity = api("pane.process_info", {"pane_id":pane})["process_info"]
+        api("pane.send_text", {"pane_id":pane,"text":"TASK-OWNED-CHAIN-DRAFT"})
+        refusal=endpoint("agent.harness.replace", {"instance_id":instance,"harness":target})
+        assert refusal.get("error",{}).get("code")=="source_has_draft",refusal
+        assert api("pane.process_info", {"pane_id":pane})["process_info"]["foreground_process_group_id"]==identity["foreground_process_group_id"]
+        # Wait for the real frontend to restore the preserved editor buffer.
+        deadline=time.monotonic()+5
+        while time.monotonic()<deadline:
+            draft=api("pane.read", {"pane_id":pane,"source":"detection","lines":20})["read"]["text"]
+            if "TASK-OWNED-CHAIN-DRAFT" in draft:break
+            time.sleep(.05)
+        assert "TASK-OWNED-CHAIN-DRAFT" in draft,draft
+        api("pane.send_keys", {"pane_id":pane,"keys":["Ctrl+c"]})
+        switch = endpoint("agent.harness.replace", {"instance_id":instance,"harness":target})
+        report["chain"].append({"target":target,"result":switch})
+        assert "error" not in switch, switch
+        switched = switch["result"]
+        assert switched["pane"]["pane_id"] == pane and switched["pane"]["terminal_id"] == terminal, switched
+        assert api("pane.process_info", {"pane_id":pane})["process_info"]["shell_pid"] == identity["shell_pid"]
+        assert len(api("pane.list")["panes"]) == 1
+        recovery=json.loads((api_path.parent/"agents.json").read_text())["native_harness_recovery"][instance]
+        loaded=pathlib.Path(recovery["target_path"]).read_text()
+        assert oldest_marker in loaded and tool_marker in loaded, "chain lost historical markers"
+        verify_target_context(target)
     report["success"] = True
 except Exception as error:
     report.update(success=False, error=str(error))
@@ -695,6 +814,8 @@ except Exception as error:
         except Exception:
             pass
 finally:
+    if restore_observer is not None and restore_observer.poll() is None:
+        restore_observer.terminate();restore_observer.wait(timeout=5)
     if client:
         client.close()
     try:
@@ -708,6 +829,9 @@ finally:
             server.terminate()
             server.wait(timeout=5)
     log.close()
+    if fixture:
+        (base/"captured-native-requests.json").write_text(json.dumps(fixture.requests,indent=2))
+        fixture.close()
     (root / "same-pane-native-result.json").write_text(
         json.dumps(report, indent=2) + "\n"
     )

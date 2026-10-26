@@ -37,6 +37,20 @@ impl NativeInputEvidence {
             return;
         }
         self.text_edit();
+        // Kitty's Ctrl+C encoding is native cancellation, and focus reports do
+        // not edit or submit the composer. Neither implies a queued prompt.
+        if matches!(
+            bytes,
+            b"\x03"
+                | b"\x1b[99;5u"
+                | b"\x1b[99;5:1u"
+                | b"\x1b[99;5:2u"
+                | b"\x1b[99;5:3u"
+                | b"\x1b[I"
+                | b"\x1b[O"
+        ) {
+            return;
+        }
         if bracketed_paste {
             if let Some(inner) = bytes
                 .strip_prefix(b"\x1b[200~")
@@ -47,11 +61,10 @@ impl NativeInputEvidence {
                 }
             }
         }
-        if bytes
-            .iter()
-            .any(|&b| b == b'\r' || b == b'\n' || b == 0x1b || b == b'\t')
-        {
+        if bytes.iter().any(|&b| b == b'\r' || b == b'\n') {
             self.potential_submission_epoch = Some(self.epoch);
+        }
+        if bytes.iter().any(|&b| b == 0x1b || b == b'\t' || b == 0x16) {
             self.uncertain_attachment_epoch = Some(self.epoch);
         }
     }
@@ -94,8 +107,29 @@ mod tests {
 
         let mut unsafe_paste = baseline;
         unsafe_paste.raw_input(b"\x1b[200~unsafe\x1bpasted text\x1b[201~", true);
-        assert_eq!(unsafe_paste.potential_submission_epoch, Some(1));
+        assert_eq!(unsafe_paste.uncertain_attachment_epoch, Some(1));
         assert!(!unsafe_paste.queue_proven_unchanged_since(&baseline));
+    }
+
+    #[test]
+    fn native_cancel_and_focus_reports_do_not_invent_queued_work() {
+        for bytes in [
+            b"\x03".as_slice(),
+            b"\x1b[99;5u",
+            b"\x1b[99;5:1u",
+            b"\x1b[99;5:2u",
+            b"\x1b[99;5:3u",
+            b"\x1b[I",
+            b"\x1b[O",
+        ] {
+            let baseline = NativeInputEvidence::default();
+            let mut evidence = baseline;
+            evidence.raw_input(bytes, false);
+            assert!(
+                evidence.queue_proven_unchanged_since(&baseline),
+                "{bytes:?}"
+            );
+        }
     }
 
     #[test]
@@ -105,8 +139,11 @@ mod tests {
         for control in [b"\r".as_slice(), b"\n", b"\t", b"\x1b", b"\x1b[<35;48;26M"] {
             let mut evidence = baseline;
             evidence.raw_input(control, false);
-            assert_eq!(evidence.potential_submission_epoch, Some(1));
-            assert_eq!(evidence.uncertain_attachment_epoch, Some(1));
+            if control == b"\r" || control == b"\n" {
+                assert_eq!(evidence.potential_submission_epoch, Some(1));
+            } else {
+                assert_eq!(evidence.uncertain_attachment_epoch, Some(1));
+            }
             assert!(!evidence.queue_proven_unchanged_since(&baseline));
         }
 

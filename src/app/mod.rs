@@ -8,6 +8,7 @@ mod agent_resume;
 pub(crate) mod agent_view;
 mod agents;
 mod harness_replace;
+mod native_source;
 pub(crate) use agents::{AGENT_START_SETTLE_DELAY, MAX_AGENT_START_TIMEOUT};
 mod api;
 #[cfg(test)]
@@ -114,6 +115,11 @@ pub struct App {
     pub(crate) agent_registry: crate::agent_registry::AgentRegistry,
     pub(crate) pending_agent_spawns: Vec<agents::DeferredAgentSpawn>,
     pub(crate) pending_harness_replacements: Vec<harness_replace::PendingReplacement>,
+    #[cfg(unix)]
+    pub(crate) managed_sources: std::collections::HashMap<
+        crate::terminal::TerminalId,
+        crate::integration::managed_source::ManagedSourceLease,
+    >,
     pub(crate) harness_replace_deadline: Option<Instant>,
     pub(crate) pending_agent_spawn_deadline: Option<Instant>,
     pub(crate) config_diagnostic_deadline: Option<Instant>,
@@ -636,6 +642,8 @@ impl App {
             },
             pending_agent_spawns: Vec::new(),
             pending_harness_replacements: Vec::new(),
+            #[cfg(unix)]
+            managed_sources: std::collections::HashMap::new(),
             harness_replace_deadline: None,
             pending_agent_spawn_deadline: None,
             render_notify,
@@ -671,6 +679,10 @@ impl App {
             api_rx,
             event_hub,
         );
+        let native_sources: Vec<_> = imports
+            .iter()
+            .filter_map(|(id, import)| import.state.native_source.clone().map(|s| (*id, s)))
+            .collect();
         let (workspaces, terminals, runtimes) = crate::persist::restore_handoff(
             snapshot,
             config.advanced.scrollback_limit_bytes,
@@ -687,6 +699,26 @@ impl App {
         app.state.workspaces = workspaces;
         app.state.terminals = terminals;
         app.terminal_runtimes = runtimes.into();
+        for (old_id, source) in native_sources {
+            let pane = app
+                .state
+                .pane_id_aliases
+                .get(&old_id)
+                .copied()
+                .unwrap_or_else(|| crate::layout::PaneId::from_raw(old_id));
+            if let Some((ws, _)) = app.find_pane(pane) {
+                if let Some(terminal) = app.state.workspaces[ws].terminal_id(pane).cloned() {
+                    let lease =
+                        crate::integration::managed_source::ManagedSourceLease::adopt_handoff(
+                            &source,
+                        )?;
+                    if let Some(state) = app.state.terminals.get_mut(&terminal) {
+                        state.native_context_input_baseline = source.baseline;
+                    }
+                    app.managed_sources.insert(terminal, lease);
+                }
+            }
+        }
         app.state.active = snapshot
             .active
             .filter(|&idx| idx < app.state.workspaces.len());
@@ -718,6 +750,11 @@ impl App {
     #[cfg(unix)]
     pub fn assume_handoff_ownership(&mut self) {
         self.terminal_runtimes.assume_handoff_ownership();
+        for lease in self.managed_sources.values_mut() {
+            if let Err(error) = lease.assume_handoff_ownership() {
+                tracing::warn!(%error,"native source helper could not be adopted");
+            }
+        }
     }
 
     pub(crate) fn ensure_default_workspace(&mut self) -> bool {

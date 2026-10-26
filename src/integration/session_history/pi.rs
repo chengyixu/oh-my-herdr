@@ -36,6 +36,8 @@ pub(crate) fn import_pi_history(
     let selection = Selection { provider, model };
 
     let identity = storage::Identity::new(history)?;
+    super::validate_tool_pairs(&history.messages)?;
+    super::validate_native_tool_names(&history.messages)?;
     let records = pi_records(history, &identity.id, cwd, &identity.stamp, &selection)?;
 
     let cwd_str = cwd
@@ -87,20 +89,22 @@ fn pi_records(
     }
 
     if let Some(model_msgs) = &history.model_messages {
-        let mut active_copies = Vec::new();
-        for msg in model_msgs {
-            active_copies.push(msg.clone());
+        super::validate_tool_pairs(model_msgs)?;
+        // Native append-only context edits keep original history visible while
+        // omitting its older projection. The active checkpoint follows in order.
+        let ids: Vec<_> = records
+            .iter()
+            .filter(|row| row["type"] == "message")
+            .map(|row| row["id"].clone())
+            .collect();
+        for target in ids {
+            let id = storage::entry_identity(session_id, records.len());
+            records.push(json!({"type":"context_edit","id":id,"parentId":parent,"timestamp":stamp,"targetId":target,"replacement":null}));
+            parent = json!(id);
         }
-        let edit_id = format!("compaction-{}", &session_id[..session_id.len().min(8)]);
-        records.push(json!({
-            "type": "custom",
-            "customType": "context_edit",
-            "id": edit_id,
-            "parentId": parent,
-            "data": {
-                "activeContextCopies": active_copies,
-            }
-        }));
+        for msg in model_msgs {
+            message_entry(msg, &mut records, &mut parent, stamp, selection)?;
+        }
     }
 
     Ok(records)
@@ -124,13 +128,36 @@ fn message_entry(
         "message": {
             "role": role,
             "content": content,
-            "timestamp": stamp,
+            "timestamp": 0,
         }
     });
+    entry["timestamp"] = json!(stamp);
+    if role == "developer" {
+        entry["message"]["role"] = json!("user");
+    }
+    if role == "toolResult" {
+        entry["message"]["toolCallId"] = message["toolCallId"].clone();
+        entry["message"]["toolName"] = message
+            .get("toolName")
+            .cloned()
+            .unwrap_or(json!("imported_tool"));
+        entry["message"]["isError"] = message.get("isError").cloned().unwrap_or(json!(false));
+    }
 
     if role == "assistant" {
-        entry["message"]["modelId"] = json!(selection.model);
-        entry["message"]["provider"] = json!(selection.provider);
+        entry["message"]["model"] = message
+            .get("model")
+            .filter(|v| v.is_string())
+            .cloned()
+            .unwrap_or(json!(selection.model));
+        entry["message"]["provider"] = message
+            .get("provider")
+            .filter(|v| v.is_string())
+            .cloned()
+            .unwrap_or(json!(selection.provider));
+        entry["message"]["api"] = json!("openai-responses");
+        entry["message"]["stopReason"] = json!("stop");
+        entry["message"]["usage"] = json!({"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}});
     }
 
     *parent = json!(id);
@@ -210,7 +237,7 @@ pub(crate) mod tests {
             .contains(&format!("untruncated-result-{}", "z".repeat(30_000))));
         assert!(records
             .iter()
-            .any(|row| row["type"] == "custom" && row["customType"] == "context_edit"));
+            .any(|row| row["type"] == "context_edit" && row["replacement"].is_null()));
 
         let serialized = serde_json::to_string(&records).unwrap();
         assert!(serialized.contains("exact-active-checkpoint"));

@@ -28,6 +28,8 @@ impl App {
     }
 
     pub(crate) fn shutdown_terminal_runtime(&mut self, terminal_id: crate::terminal::TerminalId) {
+        #[cfg(unix)]
+        self.managed_sources.remove(&terminal_id);
         if let Some(runtime) = self.terminal_runtimes.remove(&terminal_id) {
             runtime.shutdown();
         }

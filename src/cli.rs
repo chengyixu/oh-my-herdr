@@ -28,6 +28,7 @@ mod completion;
 mod harness_launch;
 mod integration;
 mod machine;
+mod native_context;
 mod notification;
 mod pane;
 mod plugin;
@@ -110,6 +111,7 @@ pub fn maybe_run(args: &[String]) -> std::io::Result<CommandOutcome> {
 
     let exit_code = match command {
         "__harness-launch" => harness_launch::run(&args[2..])?,
+        "__native-context" => native_context::run(&args[2..])?,
         "server" => {
             let Some(exit_code) = server::run_server_command(&args[2..])? else {
                 return Ok(CommandOutcome::NotCli);
