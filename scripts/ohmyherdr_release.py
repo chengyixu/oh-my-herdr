@@ -210,15 +210,18 @@ def verify_published_release(version: str, digest: str) -> None:
 
 
 def verify_npm_package(version: str) -> None:
+    """A new npm version can take minutes to become installable; never trust npm's cached metadata."""
+
     def check() -> None:
         with tempfile.TemporaryDirectory(prefix="ohmyherdr-npm-") as prefix:
             subprocess.run(
-                ["npm", "install", "--prefix", prefix, "--no-audit", "--no-fund", f"ohmyherdr@{version}"],
+                ["npm", "install", "--prefer-online", "--prefix", prefix, "--no-audit", "--no-fund",
+                 f"ohmyherdr@{version}"],
                 check=True,
             )
             verify_binary(Path(prefix, "node_modules", "ohmyherdr", "bin", "ohmyherdr-native"), version)
 
-    retry(check)
+    retry(check, attempts=30, delay=10.0)
 
 
 def publish(version: str) -> None:
