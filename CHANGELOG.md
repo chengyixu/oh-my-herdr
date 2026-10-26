@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.9.9] - 2026-10-26
+
+### Fixed
+- Release binaries carry the OhMyHerdr product identity again. The published 0.9.8 binary was compiled without `OHMYHERDR_BUILD=1`: it reported `herdr 0.9.8`, used stable Herdr's `~/.config/herdr` configuration and socket instead of `~/.config/ohmyherdr`, and followed upstream Herdr's update manifest. 0.9.9 restores the separate product runtime, so profiles saved under `~/.config/ohmyherdr` are available again.
+
+### Changed
+- Product releases are published locally with `just release-ohmyherdr <version>`. It refuses any binary that does not report `<version>-ohmyherdr.<version>` with its socket under the ohmyherdr configuration directory, and verifies the published GitHub Release and npm package. The unused GitHub Actions release workflow was removed.
+
+### Upgrading from 0.9.8
+- The 0.9.8 binary reads upstream Herdr's update manifest, so `ohmyherdr update` cannot reach 0.9.9. Reinstall with `npm install --global ohmyherdr@latest` or the direct binary download in the README. Updating from 0.9.7 or earlier works normally.
+- Profiles and settings created while running 0.9.8 were written to `~/.config/herdr` and are not migrated automatically.
+
 ## [0.9.8] - 2026-10-25
 
 ### Added
