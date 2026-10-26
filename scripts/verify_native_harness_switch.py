@@ -28,6 +28,14 @@ parser.add_argument(
     help="Start the named source without a pre-existing saved profile",
 )
 parser.add_argument(
+    "--handoff-from", type=pathlib.Path,
+    help="Start the pane on this older server binary, live-hand it off to --binary, then switch in that pane",
+)
+parser.add_argument(
+    "--source-extension", type=pathlib.Path,
+    help="Start Pi with this installed integration; require a refusal, then reload the current integration",
+)
+parser.add_argument(
     "--compacted-source", action="store_true",
     help="Qualify full recorded history separately from the native active-context checkpoint",
 )
@@ -214,8 +222,9 @@ if options.fail_target_launch:
 api_path = None
 client_path = None
 log = (base / "server.log").open("w")
+server_binary = options.handoff_from.resolve() if options.handoff_from else binary
 server = subprocess.Popen(
-    [str(binary), "--session", name, "server"],
+    [str(server_binary), "--session", name, "server"],
     env=env,
     stdin=subprocess.DEVNULL,
     stdout=log,
@@ -349,37 +358,83 @@ try:
     terminal = created["root_pane"]["terminal_id"]
     tab = created["tab"]["tab_id"]
     report.update(pane=pane, terminal=terminal, tab=tab)
-    client = socket.socket(socket.AF_UNIX)
-    client.settimeout(50)
-    client.connect(str(client_path))
-    hello = {
-        "generation": 1,
-        "cell_width_px": 8,
-        "cell_height_px": 16,
-        "surface_size": {"cols": 150, "rows": 45},
-        "pixel_mouse": False,
-        "direct_graphics": False,
-        "endpoint_keybindings": False,
-        "mouse_capture": False,
-        "snapshot_codecs": ["shell.snapshot.v1"],
-        "surface_codecs": ["shell.surface.v1"],
-        "input_codecs": ["shell.input.semantic.v1"],
-        "blob_codecs": ["shell.blob.v1"],
-    }
-    send(varint(20) + encode("endpoint.hello.v1") + encode(json.dumps(hello)))
-    v, d = frame()
-    kind, o = decodestr(d, 0)
-    text, o = decodestr(d, o)
-    welcome = json.loads(text)
-    assert "agent.harness.replace" in welcome["methods"], welcome
-    while True:
+    def server_version():
+        status = subprocess.run(
+            [str(binary), "--session", name, "status", "server", "--json"],
+            env=env, capture_output=True, text=True, timeout=10,
+        )
+        return json.loads(status.stdout)
+
+    def live_handoff():
+        # Reproduce an upgraded client attached to a stale server: the pane and
+        # its running source agent belong to the old server and must survive.
+        global terminal, client_path
+        expected = subprocess.check_output([str(binary), "--version"], text=True).split()[-1]
+        pre_handoff = api("pane.process_info", {"pane_id": pane})["process_info"]
+        report["pre_handoff_status"] = server_version()
+        handoff = subprocess.run(
+            [str(binary), "--session", name, "server", "live-handoff",
+             "--import-exe", str(binary), "--expected-version", expected],
+            env=env, capture_output=True, text=True, timeout=300,
+        )
+        report["handoff_output"] = handoff.stdout + handoff.stderr
+        assert handoff.returncode == 0, report["handoff_output"]
+        post_status = server_version()
+        report["post_handoff_status"] = post_status
+        assert expected in json.dumps(post_status), post_status
+        post_handoff = api("pane.process_info", {"pane_id": pane})["process_info"]
+        for key in ["shell_pid", "foreground_process_group_id"]:
+            assert post_handoff[key] == pre_handoff[key], (pre_handoff, post_handoff)
+        panes = api("pane.list")["panes"]
+        assert len(panes) == 1 and panes[0]["pane_id"] == pane, panes
+        # Herdr's handoff import allocates fresh terminal identities; the
+        # replacement must keep the identity the pane has after the handoff.
+        report["pre_handoff_terminal"] = terminal
+        terminal = panes[0]["terminal_id"]
+        report["terminal"] = terminal
+        client_path = next(pathlib.Path(item["session_dir"]).glob("*client.sock"))
+        report["handoff_verified"] = True
+
+    def connect_client():
+        global client, boot
+        client = socket.socket(socket.AF_UNIX)
+        client.settimeout(50)
+        client.connect(str(client_path))
+        hello = {
+            "generation": 1,
+            "cell_width_px": 8,
+            "cell_height_px": 16,
+            "surface_size": {"cols": 150, "rows": 45},
+            "pixel_mouse": False,
+            "direct_graphics": False,
+            "endpoint_keybindings": False,
+            "mouse_capture": False,
+            "snapshot_codecs": ["shell.snapshot.v1"],
+            "surface_codecs": ["shell.surface.v1"],
+            "input_codecs": ["shell.input.semantic.v1"],
+            "blob_codecs": ["shell.blob.v1"],
+        }
+        send(varint(20) + encode("endpoint.hello.v1") + encode(json.dumps(hello)))
         v, d = frame()
-        if v == 20:
-            kind, o = decodestr(d, 0)
-            if kind == "shell.snapshot.v1":
-                text, o = decodestr(d, o)
-                boot = json.loads(text)["boot_id"]
-                break
+        kind, o = decodestr(d, 0)
+        text, o = decodestr(d, o)
+        welcome = json.loads(text)
+        assert "agent.harness.replace" in welcome["methods"], welcome
+        while True:
+            v, d = frame()
+            if v == 20:
+                kind, o = decodestr(d, 0)
+                if kind == "shell.snapshot.v1":
+                    text, o = decodestr(d, o)
+                    boot = json.loads(text)["boot_id"]
+                    break
+
+    if not options.handoff_from:
+        connect_client()
+    source_extension = extension
+    if options.source_extension:
+        source_extension = base / "source-extension.ts"
+        shutil.copyfile(options.source_extension, source_extension)
     api("integration.harness.set", {"target": "codex", "active": True})
     if not options.direct_source:
         api(
@@ -403,7 +458,7 @@ try:
                     "args": [
                         "--no-extensions",
                         "--extension",
-                        str(extension),
+                        str(source_extension),
                         "--session",
                         str(source),
                         "--no-mcp",
@@ -416,9 +471,30 @@ try:
             assert time.monotonic() < deadline
             time.sleep(0.1)
     api("agent.ready.wait", {"target": pane, "timeout_ms": 30000})
+    if options.handoff_from:
+        live_handoff()
+        connect_client()
     prepared = api("agent.harness.prepare", {"target": pane})
     instance = prepared["instance_id"]
     report["instance"] = instance
+    if options.source_extension:
+        # The running source integration never registered its native context:
+        # the switch must be refused before anything changes.
+        stale = endpoint(
+            "agent.harness.replace", {"instance_id": instance, "harness": "codex"}
+        )
+        report["stale_integration_refusal"] = stale
+        assert stale.get("error", {}).get("code") == "native_context_unavailable", stale
+        assert api("agent.get", {"target": pane})["agent"]["agent"] == "pi"
+        assert len(api("pane.list")["panes"]) == 1
+        # Remediation: install the current integration, reload it in place.
+        shutil.copyfile(extension, source_extension)
+        api("pane.send_text", {"pane_id": pane, "text": "/reload"})
+        api("pane.send_keys", {"pane_id": pane, "keys": ["Enter"]})
+        api("agent.ready.wait", {"target": pane, "timeout_ms": 30000})
+        # Registration retries at most 3 x 1.5s after session_start.
+        time.sleep(6)
+        report["reloaded_integration"] = True
     # Allow registration retries to settle without changing the native source.
     time.sleep(0.3)
     before = api("pane.process_info", {"pane_id": pane})["process_info"]
@@ -625,6 +701,9 @@ finally:
         api("server.stop")
         server.wait(timeout=10)
     except Exception:
+        if options.handoff_from:
+            subprocess.run([str(binary), "--session", name, "server", "stop"],
+                           env=env, capture_output=True, timeout=15)
         if server.poll() is None:
             server.terminate()
             server.wait(timeout=5)
