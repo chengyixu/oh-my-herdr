@@ -68,7 +68,13 @@ pub(crate) fn tool_name(block: &Value) -> io::Result<String> {
     };
     let mut sanitized: String = mapped
         .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() || ch == '_' { ch } else { '_' })
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
         .collect();
     if sanitized.len() > 64 {
         sanitized.truncate(44);
@@ -141,7 +147,10 @@ pub(crate) fn validate_tool_pairs(messages: &[Value]) -> io::Result<()> {
     Ok(())
 }
 
-pub(crate) fn historical_source_configuration(history: &NativeHistory, _target: &str) -> io::Result<Option<Value>> {
+pub(crate) fn historical_source_configuration(
+    history: &NativeHistory,
+    _target: &str,
+) -> io::Result<Option<Value>> {
     let Some(context) = &history.source_context else {
         return Ok(None);
     };
@@ -1233,12 +1242,10 @@ mod tests {
         ];
         assert!(validate_native_tool_names(&messages_consistent).is_ok());
 
-        let messages_collision = vec![
-            json!({
-                "role": "assistant",
-                "content": [valid_tool, dotted_tool]
-            }),
-        ];
+        let messages_collision = vec![json!({
+            "role": "assistant",
+            "content": [valid_tool, dotted_tool]
+        })];
         assert!(validate_native_tool_names(&messages_collision).is_err());
     }
 }

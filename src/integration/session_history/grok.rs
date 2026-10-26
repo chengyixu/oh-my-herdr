@@ -81,7 +81,8 @@ pub(crate) fn import_grok_history(
             .ok_or_else(|| invalid("native Grok identity invalid"))?,
     };
 
-    let mut imported = storage::publish(history, chat_lines, chat_path, native_session, &session_id)?;
+    let mut imported =
+        storage::publish(history, chat_lines, chat_path, native_session, &session_id)?;
     imported.own_new_directory(session_dir);
     Ok(imported)
 }
@@ -96,7 +97,10 @@ fn allocate_seed_session(cwd: &Path, grok_dir: &Path) -> io::Result<Seed> {
         .to_string();
 
     let encoded_cwd = urlencoding_path(cwd);
-    let session_dir = grok_dir.join("sessions").join(&encoded_cwd).join(&session_id);
+    let session_dir = grok_dir
+        .join("sessions")
+        .join(&encoded_cwd)
+        .join(&session_id);
     if !session_dir.is_dir() {
         return Err(invalid("native Grok did not allocate an exact session"));
     }
@@ -207,7 +211,13 @@ pub(crate) mod tests {
             source_context: None,
         };
 
-        let lines = chat_records(&history, "grok-sess", Path::new("/tmp"), "2026-10-18T00:00:00Z").unwrap();
+        let lines = chat_records(
+            &history,
+            "grok-sess",
+            Path::new("/tmp"),
+            "2026-10-18T00:00:00Z",
+        )
+        .unwrap();
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0]["role"], "user");
         assert_eq!(lines[1]["role"], "assistant");

@@ -53,8 +53,10 @@ pub(crate) fn import_pi_history(
     let native_session = crate::agent_resume::PersistedAgentSession {
         source: "herdr:pi".into(),
         agent: "pi".into(),
-        session_ref: crate::agent_resume::AgentSessionRef::path(path.to_string_lossy().into_owned())
-            .ok_or_else(|| invalid("native Pi target session path is invalid"))?,
+        session_ref: crate::agent_resume::AgentSessionRef::path(
+            path.to_string_lossy().into_owned(),
+        )
+        .ok_or_else(|| invalid("native Pi target session path is invalid"))?,
     };
     storage::publish(history, records, path, native_session, &identity.id)
 }

@@ -36,46 +36,63 @@ pub(crate) fn import_family_history(
     cwd: &Path,
     program: &str,
 ) -> io::Result<storage::ImportedHistory> {
-    let agent_name = if program.contains("kilo") { "kilo" } else { "opencode" };
+    let agent_name = if program.contains("kilo") {
+        "kilo"
+    } else {
+        "opencode"
+    };
 
     let mut acp = super::super::native_acp::Discovery::start(program, &["acp"], cwd)?;
-    let init_res = acp.call("initialize", json!({
-        "protocolVersion": 1,
-        "clientCapabilities": {},
-        "clientInfo": {
-            "name": "ohmyherdr-native-import",
-            "version": "1"
-        }
-    }))?;
-    let version = init_res.pointer("/agentInfo/version").and_then(Value::as_str).unwrap_or("");
+    let init_res = acp.call(
+        "initialize",
+        json!({
+            "protocolVersion": 1,
+            "clientCapabilities": {},
+            "clientInfo": {
+                "name": "ohmyherdr-native-import",
+                "version": "1"
+            }
+        }),
+    )?;
+    let version = init_res
+        .pointer("/agentInfo/version")
+        .and_then(Value::as_str)
+        .unwrap_or("");
     if version != "7.8.8" && version != "1.19.3" {
-        return Err(invalid("this native OpenCode/Kilo version requires qualification; source retained"));
+        return Err(invalid(
+            "this native OpenCode/Kilo version requires qualification; source retained",
+        ));
     }
 
-    let result = acp.call("session/new", json!({
-        "cwd": cwd.to_string_lossy(),
-        "mcpServers": []
-    }))?;
+    let result = acp.call(
+        "session/new",
+        json!({
+            "cwd": cwd.to_string_lossy(),
+            "mcpServers": []
+        }),
+    )?;
     let session_id = result
         .get("sessionId")
         .and_then(Value::as_str)
         .ok_or_else(|| invalid("native session identity was not allocated"))?
         .to_string();
 
-    let model_id = result.pointer("/configOptions/model").and_then(Value::as_str).unwrap_or("default");
+    let model_id = result
+        .pointer("/configOptions/model")
+        .and_then(Value::as_str)
+        .unwrap_or("default");
 
     let (exchange_dir, _) = super::super::native_process::private_directory()?;
-    let seed_export = super::super::native_process::capture(
-        program,
-        &["export", &session_id],
-        cwd,
-        65536,
-    )?;
-    let seed_json: Value = serde_json::from_slice(&seed_export)
-        .map_err(|_| invalid("allocated native import seed already contains conversation records"))?;
+    let seed_export =
+        super::super::native_process::capture(program, &["export", &session_id], cwd, 65536)?;
+    let seed_json: Value = serde_json::from_slice(&seed_export).map_err(|_| {
+        invalid("allocated native import seed already contains conversation records")
+    })?;
     if let Some(msgs) = seed_json.get("messages").and_then(Value::as_array) {
         if !msgs.is_empty() {
-            return Err(invalid("allocated native import seed already contains conversation records"));
+            return Err(invalid(
+                "allocated native import seed already contains conversation records",
+            ));
         }
     }
 
@@ -83,7 +100,14 @@ pub(crate) fn import_family_history(
     let timestamp_ms = identity.created.unix_timestamp() as u64 * 1000;
     let mut ids = Ids::new(timestamp_ms);
 
-    let doc = document(history, &session_id, cwd, model_id, &mut ids, &identity.stamp)?;
+    let doc = document(
+        history,
+        &session_id,
+        cwd,
+        model_id,
+        &mut ids,
+        &identity.stamp,
+    )?;
     let import_file = exchange_dir.join("native-history.jsonl");
     let doc_bytes = serde_json::to_vec(&doc)?;
     std::fs::write(&import_file, &doc_bytes)?;
@@ -101,8 +125,9 @@ pub(crate) fn import_family_history(
         cwd,
         MAX_HISTORY_BYTES,
     )?;
-    let exported: Value = serde_json::from_slice(&after_export)
-        .map_err(|_| invalid("native import did not retain the complete encoded conversation; source retained"))?;
+    let exported: Value = serde_json::from_slice(&after_export).map_err(|_| {
+        invalid("native import did not retain the complete encoded conversation; source retained")
+    })?;
     if exported.pointer("/info/id").and_then(Value::as_str) != Some(&session_id) {
         return Err(invalid("allocated native session identity changed"));
     }
@@ -114,9 +139,18 @@ pub(crate) fn import_family_history(
             .ok_or_else(|| invalid("invalid allocated native identity"))?,
     };
 
-    let mut imported = storage::publish(history, doc["messages"].as_array().cloned().unwrap_or_default(), import_file, native_session, &session_id)?;
+    let mut imported = storage::publish(
+        history,
+        doc["messages"].as_array().cloned().unwrap_or_default(),
+        import_file,
+        native_session,
+        &session_id,
+    )?;
     imported.own_new_directory(exchange_dir);
-    imported.own_native_session(Box::leak(agent_name.to_string().into_boxed_str()), cwd.to_path_buf());
+    imported.own_native_session(
+        Box::leak(agent_name.to_string().into_boxed_str()),
+        cwd.to_path_buf(),
+    );
     Ok(imported)
 }
 

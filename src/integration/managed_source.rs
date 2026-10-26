@@ -113,7 +113,10 @@ impl ManagedSourceLease {
     pub fn launch_argv(&self, original_argv: &[String]) -> Vec<String> {
         let mut argv = vec![
             "/bin/sh".to_string(),
-            self.directory.join("launch.sh").to_string_lossy().into_owned(),
+            self.directory
+                .join("launch.sh")
+                .to_string_lossy()
+                .into_owned(),
         ];
         argv.extend_from_slice(original_argv);
         argv
@@ -144,7 +147,10 @@ impl ManagedSourceLease {
 
                 let (tx, rx) = mpsc::channel();
                 let sock_path = self.directory.join("native-context.sock");
-                let token = self.configuration["token"].as_str().unwrap_or("").to_string();
+                let token = self.configuration["token"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string();
 
                 std::thread::Builder::new()
                     .name("native-target-ready".into())

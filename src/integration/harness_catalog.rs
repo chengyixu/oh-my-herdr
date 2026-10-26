@@ -229,13 +229,11 @@ impl Harness {
             | Agent::Pi
             | Agent::Grok
             | Agent::OpenCode
-            | Agent::Kilo => {
-                &[
-                    "pi.session.v3",
-                    "codex.rollout.v163",
-                    "claude.transcript.v2.1.302",
-                ]
-            }
+            | Agent::Kilo => &[
+                "pi.session.v3",
+                "codex.rollout.v163",
+                "claude.transcript.v2.1.302",
+            ],
             _ => &[],
         }
     }
@@ -268,27 +266,21 @@ impl Harness {
                     &provider,
                 )
             }
-            Agent::Claude => {
-                super::session_history::claude::import_claude_history(
-                    &history,
-                    &snapshot.cwd,
-                    &super::env::claude_dir()?,
-                )
-            }
-            Agent::Pi => {
-                super::session_history::pi::import_pi_history(
-                    &history,
-                    &snapshot.cwd,
-                    &super::env::pi_dir()?,
-                )
-            }
-            Agent::Grok => {
-                super::session_history::grok::import_grok_history(
-                    &history,
-                    &snapshot.cwd,
-                    &super::env::grok_dir()?,
-                )
-            }
+            Agent::Claude => super::session_history::claude::import_claude_history(
+                &history,
+                &snapshot.cwd,
+                &super::env::claude_dir()?,
+            ),
+            Agent::Pi => super::session_history::pi::import_pi_history(
+                &history,
+                &snapshot.cwd,
+                &super::env::pi_dir()?,
+            ),
+            Agent::Grok => super::session_history::grok::import_grok_history(
+                &history,
+                &snapshot.cwd,
+                &super::env::grok_dir()?,
+            ),
             Agent::OpenCode | Agent::Kilo => {
                 super::session_history::opencode_family::import_family_history(
                     &history,

@@ -11,7 +11,9 @@ pub(crate) fn read_legacy_file(path: &Path, expected_id: &str) -> io::Result<Nat
         crate::platform::LimitedRead::Complete(bytes) => bytes,
         crate::platform::LimitedRead::Empty => return Err(invalid("native session is empty")),
         crate::platform::LimitedRead::Oversized => {
-            return Err(invalid("native source exceeds the exchange limit; nothing was truncated"))
+            return Err(invalid(
+                "native source exceeds the exchange limit; nothing was truncated",
+            ))
         }
     };
 
@@ -40,7 +42,10 @@ pub(crate) fn read_legacy_file(path: &Path, expected_id: &str) -> io::Result<Nat
                     return Err(invalid("native source snapshot identity changed"));
                 }
                 verified_id = true;
-                if let Some(p) = record.pointer("/payload/model_provider").and_then(Value::as_str) {
+                if let Some(p) = record
+                    .pointer("/payload/model_provider")
+                    .and_then(Value::as_str)
+                {
                     provider = p.to_string();
                 }
             }
@@ -56,7 +61,10 @@ pub(crate) fn read_legacy_file(path: &Path, expected_id: &str) -> io::Result<Nat
             }
             "compacted" => {
                 flush_items(&mut pending_items, &mut messages, &provider, &model)?;
-                if let Some(history) = record.pointer("/payload/replacement_history").and_then(Value::as_array) {
+                if let Some(history) = record
+                    .pointer("/payload/replacement_history")
+                    .and_then(Value::as_array)
+                {
                     let decoded_active = decode_items(history, &provider, &model)?;
                     model_messages = Some(decoded_active);
                 }
@@ -141,7 +149,10 @@ fn decode_items(items: &[Value], provider: &str, model: &str) -> io::Result<Vec<
             "function_call" => {
                 let call_id = item.get("call_id").and_then(Value::as_str).unwrap_or("");
                 let name = item.get("name").and_then(Value::as_str).unwrap_or("");
-                let args_str = item.get("arguments").and_then(Value::as_str).unwrap_or("{}");
+                let args_str = item
+                    .get("arguments")
+                    .and_then(Value::as_str)
+                    .unwrap_or("{}");
                 let args: Value = serde_json::from_str(args_str).unwrap_or(json!({}));
                 let mut msg = json!({
                     "role": "assistant",

@@ -14,9 +14,13 @@ pub(crate) fn snapshot(
     let file = std::fs::File::open(path)?;
     let bytes = match crate::platform::read_limited_reader(file, 256 * 1024 * 1024)? {
         crate::platform::LimitedRead::Complete(bytes) => bytes,
-        crate::platform::LimitedRead::Empty => return Err(invalid("native Claude source is empty")),
+        crate::platform::LimitedRead::Empty => {
+            return Err(invalid("native Claude source is empty"))
+        }
         crate::platform::LimitedRead::Oversized => {
-            return Err(invalid("native source exceeds the exchange limit; nothing was truncated"))
+            return Err(invalid(
+                "native source exceeds the exchange limit; nothing was truncated",
+            ))
         }
     };
 
@@ -52,8 +56,13 @@ pub(crate) fn snapshot(
         }
 
         let record_type = record.get("type").and_then(Value::as_str).unwrap_or("");
-        if record_type == "system" && record.get("subtype").and_then(Value::as_str) == Some("compactMetadata") {
-            if let Some(active) = record.pointer("/data/activeMessages").and_then(Value::as_array) {
+        if record_type == "system"
+            && record.get("subtype").and_then(Value::as_str) == Some("compactMetadata")
+        {
+            if let Some(active) = record
+                .pointer("/data/activeMessages")
+                .and_then(Value::as_array)
+            {
                 model_messages = Some(active.clone());
             }
         } else if record_type == "message" {
@@ -93,10 +102,15 @@ fn validate_linear_branch(records: &[Value]) -> io::Result<Vec<Value>> {
             by_id.insert(id.to_string(), record.clone());
             let parent = record.get("parent").and_then(Value::as_str);
             match parent {
-                Some(p) => children_of.entry(p.to_string()).or_default().push(id.to_string()),
+                Some(p) => children_of
+                    .entry(p.to_string())
+                    .or_default()
+                    .push(id.to_string()),
                 None => {
                     if root_id.is_some() {
-                        return Err(invalid("claude_source_refuses_ambiguous_transcript_branches"));
+                        return Err(invalid(
+                            "claude_source_refuses_ambiguous_transcript_branches",
+                        ));
                     }
                     root_id = Some(id.to_string());
                 }
@@ -107,7 +121,9 @@ fn validate_linear_branch(records: &[Value]) -> io::Result<Vec<Value>> {
     // Verify linear branch
     for children in children_of.values() {
         if children.len() > 1 {
-            return Err(invalid("claude_source_refuses_ambiguous_transcript_branches"));
+            return Err(invalid(
+                "claude_source_refuses_ambiguous_transcript_branches",
+            ));
         }
     }
 
@@ -133,9 +149,16 @@ fn validate_linear_branch(records: &[Value]) -> io::Result<Vec<Value>> {
 }
 
 fn decode_message(record: &Value) -> io::Result<Value> {
-    let msg_obj = record.get("message").ok_or_else(|| invalid("native Claude message content is unsupported"))?;
-    let role = msg_obj.get("role").and_then(Value::as_str).unwrap_or("user");
-    let content_val = msg_obj.get("content").ok_or_else(|| invalid("native Claude message content is unsupported"))?;
+    let msg_obj = record
+        .get("message")
+        .ok_or_else(|| invalid("native Claude message content is unsupported"))?;
+    let role = msg_obj
+        .get("role")
+        .and_then(Value::as_str)
+        .unwrap_or("user");
+    let content_val = msg_obj
+        .get("content")
+        .ok_or_else(|| invalid("native Claude message content is unsupported"))?;
 
     let mut blocks = Vec::new();
     if let Some(text) = content_val.as_str() {
@@ -191,7 +214,9 @@ pub(crate) mod tests {
 
     #[test]
     fn claude_source_refuses_ambiguous_transcript_branches() {
-        let (_root, _) = crate::platform::create_private_state_file(Path::new("/tmp/test.jsonl")).map(|_| (PathBuf::from("/tmp"), ())).unwrap_or((PathBuf::from("/tmp"), ()));
+        let (_root, _) = crate::platform::create_private_state_file(Path::new("/tmp/test.jsonl"))
+            .map(|_| (PathBuf::from("/tmp"), ()))
+            .unwrap_or((PathBuf::from("/tmp"), ()));
         let records = vec![
             json!({"type": "message", "id": "msg-1", "sessionId": "s-1", "cwd": "/tmp"}),
             json!({"type": "message", "id": "msg-2a", "parent": "msg-1", "sessionId": "s-1", "cwd": "/tmp"}),

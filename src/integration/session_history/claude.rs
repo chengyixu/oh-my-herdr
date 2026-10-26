@@ -40,7 +40,13 @@ pub(crate) fn import_claude_history(
         .ok_or_else(|| invalid("native Claude cwd is not valid UTF-8"))?;
     let slug: String = cwd_str
         .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() || ch == '-' { ch } else { '-' })
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' {
+                ch
+            } else {
+                '-'
+            }
+        })
         .collect();
     if slug.len() > 200 {
         return Err(invalid(
@@ -95,7 +101,8 @@ fn records(
     )?;
 
     if let Some(model_msgs) = &history.model_messages {
-        let checkpoint_id = storage::uuid_from_seed(&format!("{session_id}:compact:{}", records.len()));
+        let checkpoint_id =
+            storage::uuid_from_seed(&format!("{session_id}:compact:{}", records.len()));
         records.push(json!({
             "type": "system",
             "subtype": "compactMetadata",

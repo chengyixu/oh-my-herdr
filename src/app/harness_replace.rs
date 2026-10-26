@@ -218,21 +218,13 @@ impl App {
         {
             Some(t) => t,
             None => {
-                return encode_error(
-                    id,
-                    "pane_not_found",
-                    "native source terminal was not found",
-                )
+                return encode_error(id, "pane_not_found", "native source terminal was not found")
             }
         };
         let terminal = match self.state.terminals.get(&terminal_id) {
             Some(t) => t,
             None => {
-                return encode_error(
-                    id,
-                    "pane_not_found",
-                    "native source terminal was not found",
-                )
+                return encode_error(id, "pane_not_found", "native source terminal was not found")
             }
         };
         if terminal.native_context.as_ref() != Some(&params.context) {
@@ -244,13 +236,7 @@ impl App {
         }
         let runtime = match self.terminal_runtimes.get(&terminal_id) {
             Some(r) => r,
-            None => {
-                return encode_error(
-                    id,
-                    "pane_not_found",
-                    "native source runtime disappeared",
-                )
-            }
+            None => return encode_error(id, "pane_not_found", "native source runtime disappeared"),
         };
         let harness = match crate::harness::find(&params.context.agent) {
             Some(h) => h,
