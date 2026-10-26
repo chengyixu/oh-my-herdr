@@ -107,6 +107,16 @@ just test
 just check
 ```
 
+Releases are published from a local checkout of the pushed `main` commit:
+
+```bash
+just release-ohmyherdr 0.9.9
+```
+
+It builds the product identity, refuses any binary that does not report
+`<version>-ohmyherdr.<version>` with its socket under `~/.config/ohmyherdr`,
+then publishes the GitHub Release and the npm package and verifies both.
+
 ## license
 
 OhMyHerdr is licensed under the [Apache License 2.0](LICENSE).
