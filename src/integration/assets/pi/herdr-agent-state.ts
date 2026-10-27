@@ -2,7 +2,7 @@
 // managed by herdr; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
 // HERDR_INTEGRATION_ID=pi
-// HERDR_INTEGRATION_VERSION=10
+// HERDR_INTEGRATION_VERSION=11
 // @ts-nocheck
 
 import net from "node:net";
@@ -357,19 +357,25 @@ async function drainStateQueue(): Promise<void> {
   }
 }
 
-async function registerNativeContext(ctx: any, endpoint: string, token: string): Promise<boolean> {
+export async function registerNativeContext(ctx: any, endpoint: string, token: string,
+    send = sendRequestAttempt,
+    wait = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)),
+    now = () => performance.now()): Promise<boolean> {
   const params = {
     pane_id: paneId, source, agent: "pi", session_id: ctx.sessionManager.getSessionId(),
     session_path: ctx.sessionManager.getSessionFile(), endpoint, token,
     process_id: process.pid, seq: nextReportSeq(), version: 1,
   };
-  for (let attempt = 0; attempt < 3; attempt++) {
+  // Native startup and the server's process observer are asynchronous. Keep
+  // ownership strict, but allow the observer's bounded acquisition window.
+  const deadline = now() + 8_000;
+  while (now() < deadline) {
     let code: string | undefined;
-    const accepted = await sendRequestAttempt({ id: `${source}:context:${params.seq}`, method: "agent.context.register", params }, 1_500,
+    const accepted = await send({ id: `${source}:context:${params.seq}`, method: "agent.context.register", params }, 1_500,
       response => { code = response?.error?.code; return response?.result?.type === "ok"; });
     if (accepted) return true;
     if (code !== "native_context_not_owned") return false;
-    await new Promise(resolve => setTimeout(resolve, 100));
+    await wait(100);
   }
   return false;
 }

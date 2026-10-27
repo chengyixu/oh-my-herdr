@@ -20,8 +20,6 @@ import threading
 import time
 import select
 import selectors
-import sqlite3
-import contextlib
 
 MAX_BYTES = 256 * 1024 * 1024
 
@@ -154,6 +152,21 @@ class ContextServer:
             if self.wake:
                 self.wake.sendall(b'a')
 
+    def observe_manager_exit(self, pid):
+        while isinstance(pid,int) and pid>0 and not self.stopped.is_set():
+            wait_editor_exit(pid,timeout=None)
+            with self.condition:
+                if self.owner_pid is not None:return
+                current=self.configuration().get('manager_pid')
+                if current!=pid:
+                    pid=current
+                    continue
+                self.stopped.set()
+                try:
+                    if self.wake:self.wake.sendall(b'x')
+                except OSError:pass
+                return
+
     def observe_source_exit(self, pid):
         try:
             wait_editor_exit(pid, timeout=None)
@@ -173,7 +186,8 @@ class ContextServer:
             inspection = app_control(config, 'inspect')
             if not inspection['queue_unchanged']:
                 evidence=inspection['input']
-                if not evidence['known'] or evidence['uncertain_attachment_epoch'] is not None:
+                baseline=config.get('baseline') or {}
+                if not evidence['known'] or not baseline.get('known') or evidence['uncertain_attachment_epoch'] != baseline.get('uncertain_attachment_epoch'):
                     raise RuntimeError('source_has_unacknowledged_input: native attachments/controls are not proven empty')
                 self.prove_native_queue_empty(config)
             self.inspection_input=inspection['input']
@@ -200,15 +214,8 @@ class ContextServer:
         context=config['context']
         path=pathlib.Path(context['session_path'])
         if context['agent']=='codex':
-            sessions=next((p for p in path.parents if p.name=='sessions'),None)
-            if sessions is None:
-                raise RuntimeError('source_has_unacknowledged_input: native queue location unavailable')
-            database=sessions.parent/'queue_1.sqlite'
-            if not database.is_file():
-                raise RuntimeError('source_has_unacknowledged_input: native queue contract unavailable')
-            with contextlib.closing(sqlite3.connect(database.as_uri()+'?mode=ro',uri=True,timeout=1)) as connection:
-                pending=connection.execute('SELECT count(*) FROM queued_items WHERE thread_id=?',(context['session_id'],)).fetchone()[0]
-            if pending:
+            result=self.capture(config,operation='queue')
+            if result.get('empty') is not True:
                 raise RuntimeError('source_busy: native session has queued messages')
         else:
             pending=[]
@@ -223,9 +230,9 @@ class ContextServer:
                 else:raise RuntimeError('source_has_unacknowledged_input: unknown native queue operation')
             if pending:raise RuntimeError('source_busy: native session has queued messages')
 
-    def capture(self, config):
+    def capture(self, config, operation='snapshot'):
         context = config['context']
-        result = subprocess.run([config['binary'],'__native-context','snapshot',context['agent'],
+        result = subprocess.run([config['binary'],'__native-context',operation,context['agent'],
                                  context['session_path'],context['session_id'],config['cwd']],
                                 stdin=subprocess.DEVNULL,capture_output=True,timeout=10)
         if result.returncode or len(result.stdout)>MAX_BYTES:
@@ -353,6 +360,7 @@ class ContextServer:
         selector=selectors.DefaultSelector()
         selector.register(listener,selectors.EVENT_READ,'listener')
         selector.register(wake_read,selectors.EVENT_READ,'wake')
+        threading.Thread(target=self.observe_manager_exit,args=(config.get('manager_pid'),),daemon=True).start()
         try:
             while not self.stopped.is_set():
                 events=selector.select(None)

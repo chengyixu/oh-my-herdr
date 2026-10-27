@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { nativeContextSnapshot as snapshotContext, prepareNativeContextCommand as prepareContext, startNativeContextServer as startContext } from "./herdr-agent-state";
+import { nativeContextSnapshot as snapshotContext, prepareNativeContextCommand as prepareContext, startNativeContextServer as startContext, registerNativeContext } from "./herdr-agent-state";
 // Plain-message fixtures need no extended-role conversion. Production receives
 // convertToLlm from the running native SDK, exercised by the native verifier.
 const projectForModel = (messages: any[]) => messages;
@@ -35,6 +35,32 @@ function fixture() {
   return { ctx, setDraft: (value: string) => { draft = value; }, setBusy: (value: boolean) => { busy = value; },
     setQueued: (value: boolean) => { queued = value; }, setLeaf: (value: string) => { leaf = value; }, shutdowns: () => shutdowns };
 }
+
+test("native registration waits for the real process observer beyond the old three-attempt race", async () => {
+  let attempts = 0, elapsed = 0;
+  const accepted = await registerNativeContext(fixture().ctx, "/owned-context.sock", token,
+    async (_request, _timeout, verify) => {
+      attempts++;
+      const ok = attempts === 5;
+      verify?.(ok ? { result: { type: "ok" } } : { error: { code: "native_context_not_owned" } });
+      return ok;
+    }, async ms => { elapsed += ms; }, () => elapsed);
+  expect(accepted).toBe(true);
+  expect(attempts).toBe(5);
+});
+
+test("native registration remains bounded and never relaxes ownership", async () => {
+  let attempts = 0, elapsed = 0;
+  const accepted = await registerNativeContext(fixture().ctx, "/owned-context.sock", token,
+    async (_request, _timeout, verify) => {
+      attempts++;
+      verify?.({ error: { code: "native_context_not_owned" } });
+      return false;
+    }, async ms => { elapsed += ms; }, () => elapsed);
+  expect(accepted).toBe(false);
+  expect(elapsed).toBe(8_000);
+  expect(attempts).toBe(80);
+});
 
 const token = "test-only-process-capability";
 

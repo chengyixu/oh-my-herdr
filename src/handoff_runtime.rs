@@ -42,6 +42,9 @@ pub(crate) struct HandoffRuntimeState {
     /// Ephemeral private helper ownership; never stored in session snapshots.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_source: Option<crate::integration::managed_source::NativeSourceHandoff>,
+    /// Native SDK capability, transferred privately but never persisted on disk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_context: Option<crate::integration::native_context::NativeContextRegistration>,
 }
 
 #[cfg(unix)]

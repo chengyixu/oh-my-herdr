@@ -198,13 +198,29 @@ fn print_agent_manifest_status(response: &serde_json::Value) {
 }
 
 fn server_live_handoff(args: &[String]) -> std::io::Result<i32> {
-    let Some(params) = parse_live_handoff_params(args) else {
+    let Some(mut params) = parse_live_handoff_params(args) else {
         eprintln!(
             "usage: herdr server live-handoff [--import-exe <path>] [--expected-protocol <n>] [--expected-version <version>]"
         );
         return Ok(2);
     };
 
+    // The updating client knows the installed native executable, including
+    // when invoked through npm's JavaScript wrapper. Do not ask a stale server
+    // to choose its own old executable again.
+    if params.import_exe.is_none() {
+        params.import_exe = Some(
+            crate::platform::launch_executable()?
+                .to_string_lossy()
+                .into_owned(),
+        );
+        params
+            .expected_version
+            .get_or_insert_with(|| crate::build_info::version().to_owned());
+        params
+            .expected_protocol
+            .get_or_insert(crate::protocol::PROTOCOL_VERSION);
+    }
     // Live handoff is itself a protocol-mismatch recovery path, so it must
     // reach the running server without the normal CLI compatibility guard.
     let response = super::send_request_unchecked(&Request {

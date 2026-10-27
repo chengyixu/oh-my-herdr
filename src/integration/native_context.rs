@@ -66,6 +66,22 @@ impl NativeContextError {
 }
 
 impl NativeContextRegistration {
+    pub(crate) fn matches_session(&self, session: &crate::api::schema::AgentSessionInfo) -> bool {
+        if session.source != self.source || session.agent != self.agent {
+            return false;
+        }
+        match session.kind {
+            crate::agent_resume::AgentSessionRefKind::Id => session.value == self.session_id,
+            crate::agent_resume::AgentSessionRefKind::Path => {
+                session.value == self.session_path || {
+                    let expected = Path::new(&self.session_path).canonicalize();
+                    let reported = Path::new(&session.value).canonicalize();
+                    matches!((expected,reported),(Ok(a),Ok(b)) if a==b)
+                }
+            }
+        }
+    }
+
     pub(crate) fn validate_endpoint(&self) -> io::Result<()> {
         if self.version != 1
             || self.process_id == 0
@@ -165,6 +181,9 @@ impl NativeContextRegistration {
     }
 
     pub(crate) fn ready(&self) -> Result<(), NativeContextError> {
+        if crate::harness::find(&self.agent).is_some_and(|h| h.native_editor_controls().is_none()) {
+            return self.snapshot().map(|_| ());
+        }
         let response = self.request("ready", None)?;
         if response["ready"] != true {
             return Err(NativeContextError::transport(
@@ -182,5 +201,31 @@ impl NativeContextRegistration {
             ));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+    #[test]
+    fn native_path_aliases_match_but_another_file_in_the_same_cwd_never_does() {
+        let root =
+            std::env::temp_dir().join(format!("native-context-identity-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("child")).unwrap();
+        let path = root.join("exact.jsonl");
+        let other = root.join("other.jsonl");
+        std::fs::write(&path, b"original\n").unwrap();
+        std::fs::write(&other, b"original\n").unwrap();
+        let context:NativeContextRegistration=serde_json::from_value(json!({"pane_id":"w1:p1","source":"herdr:pi","agent":"pi","session_id":"exact-id","session_path":path,"endpoint":"/unused","token":"test-only-capability","process_id":1,"seq":1,"version":1})).unwrap();
+        let mut reported = crate::api::schema::AgentSessionInfo {
+            source: "herdr:pi".into(),
+            agent: "pi".into(),
+            kind: crate::agent_resume::AgentSessionRefKind::Path,
+            value: root.join("child/../exact.jsonl").to_string_lossy().into(),
+        };
+        assert!(context.matches_session(&reported));
+        reported.value = other.to_string_lossy().into();
+        assert!(!context.matches_session(&reported));
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -681,7 +681,14 @@ impl App {
         );
         let native_sources: Vec<_> = imports
             .iter()
-            .filter_map(|(id, import)| import.state.native_source.clone().map(|s| (*id, s)))
+            .filter(|(_, i)| i.state.native_source.is_some() || i.state.native_context.is_some())
+            .map(|(id, i)| {
+                (
+                    *id,
+                    i.state.native_source.clone(),
+                    i.state.native_context.clone(),
+                )
+            })
             .collect();
         let (workspaces, terminals, runtimes) = crate::persist::restore_handoff(
             snapshot,
@@ -699,7 +706,7 @@ impl App {
         app.state.workspaces = workspaces;
         app.state.terminals = terminals;
         app.terminal_runtimes = runtimes.into();
-        for (old_id, source) in native_sources {
+        for (old_id, source, context) in native_sources {
             let pane = app
                 .state
                 .pane_id_aliases
@@ -708,14 +715,19 @@ impl App {
                 .unwrap_or_else(|| crate::layout::PaneId::from_raw(old_id));
             if let Some((ws, _)) = app.find_pane(pane) {
                 if let Some(terminal) = app.state.workspaces[ws].terminal_id(pane).cloned() {
-                    let lease =
-                        crate::integration::managed_source::ManagedSourceLease::adopt_handoff(
-                            &source,
-                        )?;
                     if let Some(state) = app.state.terminals.get_mut(&terminal) {
-                        state.native_context_input_baseline = source.baseline;
+                        state.native_context = context;
                     }
-                    app.managed_sources.insert(terminal, lease);
+                    if let Some(source) = source {
+                        let lease =
+                            crate::integration::managed_source::ManagedSourceLease::adopt_handoff(
+                                &source,
+                            )?;
+                        if let Some(state) = app.state.terminals.get_mut(&terminal) {
+                            state.native_context_input_baseline = source.baseline;
+                        }
+                        app.managed_sources.insert(terminal, lease);
+                    }
                 }
             }
         }

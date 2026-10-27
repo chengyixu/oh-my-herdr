@@ -112,6 +112,12 @@ impl HeadlessServer {
                 .terminals
                 .get(terminal_id)
                 .and_then(|terminal| terminal.handoff_agent_state());
+            handoff_runtime.native_context = self
+                .app
+                .state
+                .terminals
+                .get(terminal_id)
+                .and_then(|t| t.native_context.clone());
             handoff_runtime.native_source =
                 self.app.managed_sources.get(terminal_id).map(|lease| {
                     lease.handoff_state(

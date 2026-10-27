@@ -325,6 +325,7 @@ impl App {
 
         let mut input = resume_command;
         input.push('\r');
+        runtime.begin_native_process_scope();
         if let Err(err) = runtime.try_send_bytes(Bytes::from(input)) {
             tracing::warn!(
                 pane = pane_id.raw(),

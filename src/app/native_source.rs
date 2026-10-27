@@ -19,7 +19,19 @@ impl App {
             .get(terminal)
             .and_then(|t| t.native_context.clone())
         {
-            return Ok(Some(context));
+            let current = self
+                .parse_current_public_pane_id(pane)
+                .and_then(|(ws, p)| self.agent_info(ws, p))
+                .and_then(|a| a.agent_session);
+            if current
+                .as_ref()
+                .is_none_or(|session| context.matches_session(session))
+            {
+                return Ok(Some(context));
+            }
+            if let Some(state) = self.state.terminals.get_mut(terminal) {
+                state.native_context = None;
+            }
         }
         #[cfg(unix)]
         {
@@ -70,12 +82,24 @@ impl App {
                 &cwd,
             )
             .map_err(|_| error("the exact reported native session file could not be resolved"))?;
+            let baseline = self
+                .state
+                .terminals
+                .get(terminal)
+                .and_then(|t| t.native_context_input_baseline);
             let lease = self
                 .managed_sources
                 .get_mut(terminal)
                 .ok_or_else(|| error("source launch lease disappeared"))?;
             let context = lease
-                .activate(&session.agent, pane, &session.value, &path, owners[0].pid)
+                .activate(
+                    &session.agent,
+                    pane,
+                    &session.value,
+                    &path,
+                    owners[0].pid,
+                    baseline,
+                )
                 .map_err(|_| error("source service activation failed"))?;
             context
                 .validate_endpoint()

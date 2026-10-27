@@ -111,6 +111,34 @@ mod tests {
         assert!(!unsafe_paste.queue_proven_unchanged_since(&baseline));
     }
 
+    #[tokio::test]
+    async fn a_new_native_owner_does_not_inherit_the_previous_process_input_uncertainty() {
+        let (runtime, _receiver) = crate::pane::PaneRuntime::test_with_channel(80, 24);
+        runtime.set_full_lifecycle_authority_active(true);
+        runtime.set_self_reported_agent_active(true);
+        runtime
+            .native_input
+            .set(NativeInputEvidence::restored_unknown());
+        let previous = runtime.native_input_evidence();
+        assert!(!previous.known);
+        runtime.begin_native_process_scope();
+        assert!(!runtime
+            .full_lifecycle_authority_active
+            .load(std::sync::atomic::Ordering::Acquire));
+        assert!(!runtime
+            .self_reported_agent_active
+            .load(std::sync::atomic::Ordering::Acquire));
+        let baseline = runtime.native_input_evidence();
+        assert!(baseline.known && baseline.epoch > previous.epoch);
+        assert!(baseline.uncertain_attachment_epoch.is_none());
+        runtime
+            .try_send_bytes(bytes::Bytes::from_static(b"\x1b"))
+            .unwrap();
+        assert!(!runtime
+            .native_input_evidence()
+            .queue_proven_unchanged_since(&baseline));
+    }
+
     #[test]
     fn native_cancel_and_focus_reports_do_not_invent_queued_work() {
         for bytes in [

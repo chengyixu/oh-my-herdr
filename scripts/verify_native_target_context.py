@@ -21,7 +21,10 @@ def qualify(target, path, cwd, native_env, fixture, required, excluded):
         module=pathlib.Path(global_root)/'@earendil-works/pi-coding-agent/dist/index.js'
         script='''import {SessionManager,convertToLlm} from MODULE;
 const session=SessionManager.open(process.argv[1]);
-const context=convertToLlm(session.buildSessionContext().messages);
+const state=session.buildSessionContext();
+const selected=session.getEntries().filter(e=>e.type==="model_change").at(-1);
+if(!selected || state.model?.provider!==selected.provider || state.model?.modelId!==selected.modelId) throw new Error("native target model selection changed");
+const context=convertToLlm(state.messages);
 console.log(JSON.stringify(context));'''.replace('MODULE',json.dumps(module.as_uri()))
         copy=root/source.name;shutil.copyfile(source,copy)
         result=subprocess.run(['node','--input-type=module','-e',script,str(copy)],env=env,cwd=cwd,capture_output=True,text=True,timeout=20)

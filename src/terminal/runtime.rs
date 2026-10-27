@@ -458,6 +458,10 @@ impl TerminalRuntime {
         self.0.kitty_image_placements_with_data_filter(needs_data)
     }
 
+    pub(crate) fn begin_native_process_scope(&self) {
+        self.0.begin_native_process_scope();
+    }
+
     pub fn native_input_evidence(&self) -> crate::pane::native_input::NativeInputEvidence {
         self.0.native_input_evidence()
     }

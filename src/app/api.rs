@@ -714,7 +714,17 @@ impl App {
             .map(|pane| pane_agent_status(update.state, pane.seen))
             .unwrap_or_else(|| pane_agent_status(update.state, update.seen));
 
-        if !update.agent_released {
+        let initializing_unknown = agent_status == crate::api::schema::AgentStatus::Unknown
+            && self
+                .state
+                .workspaces
+                .get(update.ws_idx)
+                .and_then(|ws| ws.terminal_id(update.pane_id))
+                .and_then(|id| self.state.terminals.get(id))
+                .is_some_and(|t| t.managed_agent_launch_pending());
+        // A pending reservation is active; lack of an initial native observation
+        // must not overwrite it with Unknown. Readiness remains a separate fact.
+        if !update.agent_released && !initializing_unknown {
             if let Some(instance_id) = update.roster_instance_id.as_deref() {
                 if let Err(err) = self.update_agent_registry(|registry| {
                     registry.roster_update_status_instance(

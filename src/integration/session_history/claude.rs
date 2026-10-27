@@ -8,6 +8,16 @@ pub(crate) fn import_claude_history(
     cwd: &Path,
     claude_dir: &Path,
 ) -> io::Result<storage::ImportedHistory> {
+    if !history.messages.iter().any(|m| {
+        matches!(
+            m["role"].as_str(),
+            Some("user" | "assistant" | "toolResult")
+        )
+    }) {
+        return Err(invalid(
+            "native Claude empty-history import requires qualification; source retained",
+        ));
+    }
     let version = super::super::native_process::capture("claude", &["--version"], cwd, 4096)?;
     if !matches!(
         String::from_utf8_lossy(&version).trim(),
@@ -167,6 +177,22 @@ fn append_messages(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn unqualified_empty_claude_history_never_publishes_an_unloadable_session() {
+        let history = NativeHistory {
+            session_id: "empty".into(),
+            messages: Vec::new(),
+            model_messages: None,
+            source_bytes: Vec::new(),
+            source_context: None,
+        };
+        let root =
+            std::env::temp_dir().join(format!("empty-claude-not-published-{}", std::process::id()));
+        let result = import_claude_history(&history, Path::new("/tmp"), &root);
+        assert!(result.unwrap_err().to_string().contains("empty-history"));
+        assert!(!root.exists());
+    }
 
     #[test]
     fn claude_target_retains_recorded_history_and_has_a_native_checkpoint() {

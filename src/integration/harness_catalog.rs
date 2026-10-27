@@ -232,6 +232,7 @@ impl Harness {
             | Agent::Kilo => &[
                 "pi.session.v3",
                 "codex.rollout.v163",
+                "codex.history.v164",
                 "claude.transcript.v2.1.302",
             ],
             _ => &[],
@@ -240,6 +241,16 @@ impl Harness {
     /// Native import adapters qualified with the installed tool, not UI labels.
     pub fn context_import_from(&self, source_format: &str) -> bool {
         self.native_import_formats().contains(&source_format)
+    }
+    pub(crate) fn preflight_native_launch(
+        &self,
+        cwd: &std::path::Path,
+        binding: Option<&(String, String)>,
+    ) -> std::io::Result<()> {
+        match self.agent {
+            Agent::Codex => super::session_history::codex_native::preflight_target(cwd, binding),
+            _ => Ok(()),
+        }
     }
     pub(crate) fn import_native_context(
         &self,

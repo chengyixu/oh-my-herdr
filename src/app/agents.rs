@@ -569,17 +569,37 @@ impl App {
             })
     }
 
-    pub(super) fn replacement_launch_arguments(
+    fn replacement_profile(
         &self,
         role: &str,
-        session: &crate::agent_resume::PersistedAgentSession,
-    ) -> Result<ProfileLaunchSettings, String> {
+        harness: &str,
+    ) -> Result<crate::agent_registry::AgentProfile, String> {
         let mut profile = self
             .agent_registry
             .get(role)
             .cloned()
             .ok_or("saved agent profile disappeared")?;
-        apply_instance_harness(&mut profile, &session.agent);
+        apply_instance_harness(&mut profile, harness);
+        Ok(profile)
+    }
+
+    pub(super) fn replacement_launch_binding(
+        &self,
+        role: &str,
+        harness: &str,
+    ) -> Result<Option<(String, String)>, String> {
+        let profile = self.replacement_profile(role, harness)?;
+        profile_launch_settings(harness, &profile)
+            .map(|(_, binding)| binding)
+            .map_err(|e| format!("{e:?}"))
+    }
+
+    pub(super) fn replacement_launch_arguments(
+        &self,
+        role: &str,
+        session: &crate::agent_resume::PersistedAgentSession,
+    ) -> Result<ProfileLaunchSettings, String> {
+        let profile = self.replacement_profile(role, &session.agent)?;
         let plan = crate::agent_resume::plan(&session.source, &session.agent, &session.session_ref)
             .ok_or("native resume command is unavailable")?;
         let mut args = plan.argv.into_iter().skip(1).collect::<Vec<_>>();
@@ -665,6 +685,7 @@ impl App {
             .get_mut(&terminal_id)
             .ok_or("the original terminal changed")?;
         terminal.retire_native_process_for_replacement();
+        runtime.begin_native_process_scope();
         terminal.begin_managed_agent(
             name.to_string(),
             kind,
@@ -859,6 +880,7 @@ impl App {
             .terminals
             .get_mut(&preparation.terminal_id)
             .ok_or_else(|| AgentStartError::TargetUnavailable(preparation.target.clone()))?;
+        runtime.begin_native_process_scope();
         terminal.begin_managed_agent(
             preparation.name,
             preparation.kind,

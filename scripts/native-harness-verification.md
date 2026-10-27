@@ -19,8 +19,8 @@ Integration selection, native launch/exit controls, context formats, imports,
 and permission defaults remain integration-owned. The client requests the
 server's `agent.harness.replace` operation.
 
-Verified native versions: Codex 0.164.0, Claude Code 2.1.310, and the installed
-Pi SDK with `SessionManager.appendContextEdit` and session projection support.
+Verified native versions: Codex 0.164.0, Claude Code 2.1.310, and Pi 1.4.0
+with integration v11, native context edits and session projection support.
 The tests use real native CLIs and task-owned local HTTP protocol fixtures. No
 operator model, provider, account, or credential configuration is changed.
 
@@ -58,6 +58,21 @@ native SDK and inspects `convertToLlm(buildSessionContext().messages)`.
 The optional turn exercise submits real prompts to native Codex/Claude TUIs and
 waits for the fixture's assistant reply before switching again.
 
+Fresh native-created histories are verified separately, rather than assuming an
+imported legacy rollout represents a new paginated Codex thread:
+
+```sh
+python3 scripts/verify_native_fresh_sources.py --binary "$BINARY" \
+  --source codex --output ./proof/fresh-codex
+python3 scripts/verify_native_fresh_sources.py --binary "$BINARY" \
+  --source claude --output ./proof/fresh-claude
+```
+
+These create native sessions, submit real turns through the local fixture, and
+then switch through all three harnesses. Native Pi model selection is checked
+independently from historical assistant provenance. Native Codex queue reads use
+`thread/queue/list`; no private database schema is treated as an API.
+
 Compacted runs additionally require the active summary and retained context in
 native requests, and prohibit resurrection of old messages and excluded
 execution diagnostics. Complete older history must still exist in the target
@@ -69,16 +84,22 @@ file. A refusal is a failed transition, not successful pair coverage.
   editor service cannot acquire a different `EDITOR` environment in place. Their
   sessions must be resumed through a managed launch once. Installing the binary
   alone cannot change an already running process's environment.
-- Paginated Codex source histories need a complete native export contract. A
-  single rollout is not assumed complete. Opaque encrypted reasoning, unknown
+- Paginated Codex histories are read through native `thread/items/list` until
+  `nextCursor` is explicitly null, then archived with the complete native export.
+  The rollout supplies the distinct active model window; older native pages must
+  not be expanded back into it. Opaque encrypted reasoning, unknown
   content, ambiguous branches, incomplete files, changed identities and unknown
   attachment/key sequences are refused before source exit.
 - Pending native queues are refused. Completed ordinary prompts are allowed
   after native queue checks and an editor-held snapshot. Queue inspection is
   scoped to the exact session; sibling queues do not claim the pane.
 - Target account errors, trust dialogs and native confirmations must be resolved
-  in the native harness. They do not count as a ready target. No credential or
-  trust settings are silently changed.
+  in the native harness. Codex's read-only account/bootstrap check runs before
+  source export/exit, with the profile's process-local credential binding. A known
+  account failure therefore retains the original process and unsent draft.
+  They do not count as a ready target. No credentials or trust settings are changed.
+- Empty-history Claude imports are refused before shutdown until a native empty
+  session encoding is qualified; an empty transcript is not silently published.
 - Other activated harnesses are not qualified as switch sources by this change.
   Their menu presence or a target import adapter is not an end-to-end result.
 

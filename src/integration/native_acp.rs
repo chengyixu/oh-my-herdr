@@ -16,6 +16,15 @@ pub(super) struct Discovery {
 }
 impl Discovery {
     pub fn start(program: &str, args: &[&str], cwd: &std::path::Path) -> io::Result<Self> {
+        Self::start_bound(program, args, cwd, 8 * 1024 * 1024, None)
+    }
+    pub fn start_bound(
+        program: &str,
+        args: &[&str],
+        cwd: &std::path::Path,
+        limit: usize,
+        binding: Option<&(String, String)>,
+    ) -> io::Result<Self> {
         let mut command = crate::noninteractive_process::command(program);
         command
             .args(args)
@@ -23,6 +32,12 @@ impl Discovery {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
+        if let Some((target, source)) = binding {
+            let value = std::env::var_os(source).ok_or_else(|| {
+                io::Error::other("native target credential reference is unavailable")
+            })?;
+            command.env(target, value);
+        }
         super::native_process::isolate_from_pane(&mut command);
         crate::platform::configure_native_helper(&mut command)?;
         let mut child = command.spawn()?;
@@ -46,7 +61,7 @@ impl Discovery {
         let reader = std::thread::Builder::new()
             .name("native-acp-discovery".into())
             .spawn(move || {
-                for line in BufReader::new(output.take(8 * 1024 * 1024)).lines() {
+                for line in BufReader::new(output.take(limit as u64)).lines() {
                     let Ok(line) = line else { break };
                     let Ok(value) = serde_json::from_str::<Value>(&line) else {
                         continue;
@@ -77,6 +92,19 @@ impl Discovery {
             }
         }
     }
+    pub fn notify(&mut self, method: &str, params: Value) -> io::Result<()> {
+        let input = self
+            .input
+            .as_mut()
+            .ok_or_else(|| io::Error::other("native protocol closed"))?;
+        serde_json::to_writer(
+            &mut *input,
+            &json!({"jsonrpc":"2.0","method":method,"params":params}),
+        )?;
+        input.write_all(b"\n")?;
+        input.flush()
+    }
+
     pub fn call(&mut self, method: &str, params: Value) -> io::Result<Value> {
         self.sequence += 1;
         let input = self

@@ -9,21 +9,28 @@ pub(super) fn run(args: &[String]) -> io::Result<i32> {
             "invalid native context request",
         ));
     };
-    if operation != "snapshot" {
-        return Err(io::Error::other("unknown native context operation"));
-    }
-    let snapshot = match crate::integration::session_history::export_snapshot(
-        agent,
-        Path::new(path),
-        id,
-        Path::new(cwd),
-    ) {
-        Ok(snapshot) => snapshot,
+    let result = match operation.as_str() {
+        "snapshot" => crate::integration::session_history::export_snapshot(
+            agent,
+            Path::new(path),
+            id,
+            Path::new(cwd),
+        )
+        .and_then(|s| serde_json::to_value(s).map_err(io::Error::other)),
+        "queue" if agent == "codex" => {
+            crate::integration::session_history::codex_native::queue_empty(Path::new(cwd), id)
+                .map(|empty| serde_json::json!({"empty":empty}))
+        }
+        _ => return Err(io::Error::other("unknown native context operation")),
+    };
+    match result {
+        Ok(value) => {
+            println!("{value}");
+            Ok(0)
+        }
         Err(error) => {
             println!("{}", serde_json::json!({"error":error.to_string()}));
-            return Ok(1);
+            Ok(1)
         }
-    };
-    println!("{}", serde_json::to_string(&snapshot)?);
-    Ok(0)
+    }
 }

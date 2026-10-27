@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.9.10] - 2026-10-27
+
+### Fixed
+- Managed Claude and Codex sessions can export their exact native history for same-pane switching. Pi, Codex and Claude round trips preserve the pane, terminal, shell and roster instance, while keeping complete recorded history separate from compacted model context.
+- Codex paginated history follows the native persisted-items API to completion. Claude imports use native transcript records, parent links, tool payloads and compaction boundaries. Native Pi model selection remains separate from historical assistant provenance.
+- A target must acknowledge a native ready prompt before a switch succeeds. Drafts, queued work, changed context and unsupported content stop the transition. Editor release completes before input resumes, and a native exit is never repeated after a lost acknowledgement.
+- Codex account/bootstrap failures are checked before source export or exit, using the profile's process-local credential reference. Authentication failures retain the source process and unsent draft.
+- Pending replacements retain their instance through stale observations of the retired source. A new native process resets the previous process's detection authority and input uncertainty; shared-session spawn reservations retain their active status until a real native status arrives.
+- Cold restores wait for the real native process instead of treating saved metadata as ready. Native editor services and Pi exporter registrations survive live server handoff. Helpers are cleaned up when their native owner or unbound launch manager exits.
+- Pi integration v11 uses a bounded ownership-registration window instead of failing permanently after three startup races.
+
+### Qualification and limits
+- Native qualification covers all six directions among Pi 1.4.0, Codex 0.164.0 and Claude Code 2.1.310, including fresh native-created sessions, real TUI turns through task-owned local protocol fixtures, drafts, compaction, model-request captures, live handoff and cold restart. These are native CLI tests, not evidence that an operator's provider login is healthy.
+- Existing Claude/Codex processes launched without the editor service need one managed resume of their exact session. Installing a binary cannot change an already-running process's editor environment. Old Pi processes may need one integration reload when upgrading from a server that did not transfer exporter registrations.
+- Opaque or unqualified content, unknown attachment/key sequences and empty-history Claude imports are refused safely. Other activated harnesses are not qualified as switch sources by this release; their menu presence is not successful coverage.
+
 ## [0.9.9] - 2026-10-26
 
 ### Fixed
@@ -15,7 +31,7 @@
 ## [0.9.8] - 2026-10-25
 
 ### Added
-- Same-pane lossless harness switching across all active integrations (Pi, Codex, Claude, Grok, OpenCode, Kilo). Swapping harnesses preserves the existing PTY/shell, terminal session ID, and complete recorded conversation history.
+- Correction: 0.9.8 included prototype import/source code for Pi, Codex, Claude, Grok, OpenCode and Kilo, but only Pi → Codex had native end-to-end qualification. The Claude/Codex source bridge was not wired into launches. The earlier claim that every active integration already supported lossless switching was incorrect.
 - Native bypass and auto-approval modes enabled by default for all supported managed harnesses (Claude `--dangerously-skip-permissions`, Codex `--dangerously-bypass-approvals-and-sandbox`, Goose auto mode, etc.).
 - Shared atomic native history storage with rollback safety: prepared imports are staged atomically via temporary files and hardlinks; failed transitions rollback to the source session cleanly without data loss.
 - Owned native helper processes and isolation from pane environment variables.

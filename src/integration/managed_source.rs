@@ -83,6 +83,9 @@ impl ManagedSourceLease {
     }
     pub(crate) fn assume_handoff_ownership(&mut self) -> io::Result<()> {
         self.owned = true;
+        self.configuration["manager_pid"] = json!(std::process::id());
+        self.configuration["binary"] = serde_json::to_value(std::env::current_exe()?)?;
+        write_config(&self.directory.join("lease.json"), &self.configuration)?;
         Ok(())
     }
     pub(crate) fn create(cwd: &Path) -> io::Result<Self> {
@@ -98,7 +101,7 @@ impl ManagedSourceLease {
                 .map(|b| format!("{b:02x}"))
                 .collect::<String>();
             let config = json!({"endpoint":directory.join("native-context.sock"),"token":token,
-                "api_endpoint":crate::api::socket_path(),"binary":std::env::current_exe()?,"cwd":cwd,"context":null});
+                "api_endpoint":crate::api::socket_path(),"binary":std::env::current_exe()?,"manager_pid":std::process::id(),"cwd":cwd,"context":null});
             write_config(&lease, &config)?;
             let editor_path = directory.join("editor.sh");
             std::fs::write(
@@ -168,6 +171,7 @@ impl ManagedSourceLease {
         id: &str,
         path: &Path,
         process_id: u32,
+        baseline: Option<crate::pane::native_input::NativeInputEvidence>,
     ) -> io::Result<NativeContextRegistration> {
         let registration = NativeContextRegistration {
             agent: agent.into(),
@@ -187,6 +191,7 @@ impl ManagedSourceLease {
                 .ok_or_else(|| io::Error::other("source capability missing"))?
                 .into(),
         };
+        self.configuration["baseline"] = serde_json::to_value(baseline)?;
         self.configuration["binary"] = serde_json::to_value(std::env::current_exe()?)?;
         self.configuration["context"] = serde_json::to_value(&registration)?;
         write_config(&self.directory.join("lease.json"), &self.configuration)?;

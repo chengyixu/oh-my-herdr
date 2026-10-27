@@ -15,7 +15,7 @@ sockets, sessions, and updater.
 
 ## What it includes
 
-- A terminal-only catalog of 40 coding CLI tools. Activate installed tools in
+- A terminal-only catalog of coding CLI tools. Activate installed tools in
   **Integrations**; harness pickers and profile controls follow that metadata.
   Tool CLIs are installed separately and retain their native authentication and
   model configuration.
@@ -27,10 +27,12 @@ sockets, sessions, and updater.
   cwd**, **Native harness**, **Edit profile**, and **Delete profile**.
 - A pane control such as `Harness: pi`. Qualified native adapters replace the
   harness in that same pane, preserving its pane ID, terminal, shell and layout.
-  Pi 1.1 → Codex 0.163 currently preserves complete recorded message history,
-  tool calls/results and images. Native compaction checkpoints and context
-  exclusions are preserved separately from the complete recorded history.
-  The source branch is retained for recovery.
+  Native qualification covers all six directions among Pi 1.4.0, Codex 0.164.0
+  and Claude Code 2.1.310, including fresh native-created histories and
+  completed model turns through local protocol fixtures. Codex paginated history
+  is collected through its native API. Compacted context remains separate from
+  the complete recorded history; the source is archived for recovery.
+  These checks establish native transfer behavior, not the health of your account login.
   Drafts, native blockers, unsupported content or unqualified integration pairs
   stop the action before the source is closed; there is no split-pane fallback.
 - Persistent current-tab, grouped, priority, and saved-profile Agents views.
@@ -56,12 +58,30 @@ ready, run the updater and follow its migration guidance:
 ohmyherdr update
 ```
 
-Use `ohmyherdr update --handoff` when ready to install this release and hand
-the running server to it. This is required to activate live harness switching;
-a plain `ohmyherdr update` keeps the running server on its existing build.
-Hand off only when ready to change the live server. Reopen the updated TUI client,
-then install the updated Pi/Codex integrations. Run `/reload` inside each existing
-Pi conversation to register its new native exporter. Saved activation data and
+Use `ohmyherdr update --handoff` when installing a newer binary and activating
+its server-side changes. If npm already installed the current client while your
+server is older, run the native handoff explicitly from an ordinary terminal:
+
+```sh
+ohmyherdr status
+ohmyherdr server live-handoff
+```
+
+The updated CLI selects its own native executable, including when invoked
+through the npm wrapper. This preserves pane processes; a plain client detach
+leaves the server running. Live handoff remains experimental.
+
+Install the updated Pi integration (`ohmyherdr integration install pi`), then run
+`/reload` in old Pi conversations when needed. New managed Claude/Codex launches
+and cold restores receive the native editor service. An existing process that
+never inherited it needs one managed resume of its exact session; changing the
+installed binary cannot change that process's environment.
+
+Other activated harnesses are not qualified as switch sources by this release.
+Unsupported or opaque content and empty-history Claude imports fail before source
+exit. Resolve native authentication and confirmations in the selected harness;
+Codex's startup account check retains the original process if bootstrap fails.
+Saved activation data and
 native replacement recovery use
 registry format 6; older writers preserve newer registry files without modifying
 them.

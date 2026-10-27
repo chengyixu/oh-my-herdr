@@ -1,8 +1,10 @@
 import importlib.util
 import json
 import pathlib
-import sqlite3
 import tempfile
+import subprocess
+import time
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -21,6 +23,35 @@ class NativeContextServiceTest(unittest.TestCase):
         self.server=service.ContextServer(self.lease)
     def tearDown(self):
         self.temp.cleanup()
+    def test_unbound_service_stops_when_its_task_owned_manager_dies(self):
+        manager=subprocess.Popen([sys.executable,'-c','import sys;sys.stdin.read()'],stdin=subprocess.PIPE)
+        self.config.update(endpoint=str(self.root/'native-context.sock'),manager_pid=manager.pid,context=None)
+        self.lease.write_text(json.dumps(self.config))
+        helper=subprocess.Popen([sys.executable,str(SOURCE),'server','--lease',str(self.lease)],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+        try:
+            deadline=time.monotonic()+5
+            while not pathlib.Path(self.config['endpoint']).exists() and time.monotonic()<deadline:time.sleep(.02)
+            self.assertTrue(pathlib.Path(self.config['endpoint']).exists())
+            manager.terminate();manager.wait(timeout=5)
+            self.assertEqual(helper.wait(timeout=5),0,helper.stderr.read().decode())
+            self.assertFalse(pathlib.Path(self.config['endpoint']).exists())
+        finally:
+            if manager.poll() is None:manager.kill();manager.wait()
+            if helper.poll() is None:helper.kill();helper.wait()
+            manager.stdin.close();helper.stderr.close()
+
+    def test_manager_exit_follows_committed_handoff_ownership(self):
+        self.config['manager_pid']=123
+        self.lease.write_text(json.dumps(self.config))
+        def leave(pid,timeout=None):
+            if pid==123:
+                self.config['manager_pid']=456;self.lease.write_text(json.dumps(self.config))
+            return True
+        with patch.object(service,'wait_editor_exit',side_effect=leave) as wait:
+            self.server.observe_manager_exit(123)
+            self.assertEqual([call.args[0] for call in wait.call_args_list],[123,456])
+            self.assertTrue(self.server.stopped.is_set())
+
     def test_lease_must_be_private(self):
         self.lease.chmod(0o644)
         with self.assertRaisesRegex(RuntimeError,'not private'):service.read_private(self.lease)
@@ -62,16 +93,17 @@ class NativeContextServiceTest(unittest.TestCase):
                 self.server.request({'token':'test-capability','action':'close','snapshot_id':'old'})
             control.assert_not_called()
     def test_native_codex_queue_is_checked_for_the_exact_session(self):
-        home=self.root/'codex';directory=home/'sessions/2026/10/26';directory.mkdir(parents=True)
-        database=home/'queue_1.sqlite'
-        connection=sqlite3.connect(database)
-        connection.execute('CREATE TABLE queued_items(thread_id TEXT)')
-        connection.execute('INSERT INTO queued_items VALUES (?)',('unrelated-sibling',));connection.commit()
-        config={'context':{'agent':'codex','session_id':'exact-session','session_path':str(directory/'rollout.jsonl')}}
-        self.server.prove_native_queue_empty(config)
-        connection.execute('INSERT INTO queued_items VALUES (?)',('exact-session',));connection.commit()
-        with self.assertRaisesRegex(RuntimeError,'queued messages'):self.server.prove_native_queue_empty(config)
-        connection.close()
+        self.config.update(binary='/task-owned/ohmyherdr',cwd=str(self.root))
+        self.config['context']['agent']='codex'
+        response=service.subprocess.CompletedProcess([],0,stdout=b'{"empty":true}',stderr=b'')
+        with patch.object(service.subprocess,'run',return_value=response) as run:
+            self.server.prove_native_queue_empty(self.config)
+            command=run.call_args.args[0]
+            self.assertEqual(command[1:4],['__native-context','queue','codex'])
+            self.assertEqual(command[-2:],[self.config['context']['session_id'],str(self.root)])
+        response=service.subprocess.CompletedProcess([],0,stdout=b'{"empty":false}',stderr=b'')
+        with patch.object(service.subprocess,'run',return_value=response):
+            with self.assertRaisesRegex(RuntimeError,'queued messages'):self.server.prove_native_queue_empty(self.config)
     def test_one_native_dequeue_cannot_hide_a_second_queued_prompt(self):
         source=self.root/'source.jsonl'
         rows=[{'type':'queue-operation','operation':op} for op in ['enqueue','enqueue','dequeue']]

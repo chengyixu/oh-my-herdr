@@ -2266,8 +2266,14 @@ impl TerminalState {
             } => observed_expected || known_agent == Some(managed.kind),
             ManagedAgentPhase::Blocked | ManagedAgentPhase::Active => false,
         };
-        let clear = process_exited
-            || known_agent.is_some_and(|agent| agent != managed.kind)
+        // A detector observation already in flight can still describe the
+        // retired source. While a fenced replacement has not observed its new
+        // process yet, retain the reservation and wait for that exact kind.
+        let awaiting_replacement = self.native_replacement_input_paused
+            && matches!(managed.phase, ManagedAgentPhase::Pending { .. })
+            && !observed_expected;
+        let clear = (process_exited || known_agent.is_some_and(|agent| agent != managed.kind))
+            && !awaiting_replacement
             || matches!(managed.phase, ManagedAgentPhase::Pending { .. })
                 && observed_expected
                 && known_agent.is_none();
@@ -2515,6 +2521,30 @@ mod tests {
 
     fn test_terminal() -> TerminalState {
         TerminalState::new(TerminalId::alloc(), "/tmp".into())
+    }
+
+    #[test]
+    fn pending_replacement_keeps_its_identity_through_a_retired_source_observation() {
+        let mut terminal = test_terminal();
+        let now = Instant::now();
+        terminal.native_replacement_input_paused = true;
+        terminal.begin_managed_agent(
+            "same-agent".into(),
+            Agent::Codex,
+            Some("same-instance".into()),
+            now,
+            Duration::from_secs(3),
+            Duration::from_secs(30),
+        );
+        terminal.set_detected_state(Some(Agent::Pi), AgentState::Idle);
+        terminal.reconcile_managed_agent_at(now + Duration::from_millis(100), false);
+        assert_eq!(terminal.live_roster_instance_id(), Some("same-instance"));
+        assert!(terminal.managed_agent_launch_pending());
+        terminal.reconcile_managed_agent_at(now + Duration::from_millis(200), true);
+        assert!(terminal.managed_agent_launch_pending());
+        terminal.set_detected_state(Some(Agent::Codex), AgentState::Idle);
+        terminal.reconcile_managed_agent_at(now + Duration::from_secs(4), false);
+        assert!(terminal.managed_agent_interactive_ready());
     }
 
     #[test]

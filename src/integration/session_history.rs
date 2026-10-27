@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 
 pub(crate) mod claude;
 pub(crate) mod claude_source;
+pub(crate) mod codex_native;
 pub(crate) mod codex_source;
 pub(crate) mod grok;
 pub(crate) mod opencode_family;
@@ -253,6 +254,11 @@ pub(crate) fn read_native_snapshot(
         "codex.rollout.v163" => {
             codex_source::decode(snapshot_record_bytes(snapshot)?, &snapshot.session_id)
         }
+        "codex.history.v164" => codex_source::decode_with_native(
+            snapshot_record_bytes(snapshot)?,
+            &snapshot.session_id,
+            snapshot.projection.get("native_export"),
+        ),
         "claude.transcript.v2.1.302" => claude_source::decode(
             snapshot_record_bytes(snapshot)?,
             &snapshot.session_id,
@@ -286,12 +292,21 @@ pub(crate) fn export_snapshot(
         "claude" => claude_source::snapshot(path, session_id, cwd)?,
         _ => return Err(invalid("source exporter unavailable")),
     };
-    Ok(super::native_context::NativeContextSnapshot {
-        version: 1,
-        format: crate::harness::find(agent)
+    let native_export = history
+        .source_context
+        .as_ref()
+        .and_then(|v| v.get("native_export"))
+        .cloned();
+    let format = if native_export.is_some() {
+        "codex.history.v164"
+    } else {
+        crate::harness::find(agent)
             .and_then(|h| h.native_context_format())
             .ok_or_else(|| invalid("source format unavailable"))?
-            .into(),
+    };
+    Ok(super::native_context::NativeContextSnapshot {
+        version: 1,
+        format: format.into(),
         session_id: session_id.into(),
         session_path: path.to_string_lossy().into(),
         leaf_id: None,
@@ -301,7 +316,7 @@ pub(crate) fn export_snapshot(
         model_messages: history
             .model_messages
             .unwrap_or_else(|| history.messages.clone()),
-        projection: json!({}),
+        projection: json!({"native_export":native_export}),
         system_prompt: String::new(),
     })
 }

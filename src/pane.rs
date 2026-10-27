@@ -2193,6 +2193,7 @@ impl PaneRuntime {
             ),
             agent_state: None,
             native_source: None,
+            native_context: None,
         }
     }
 
@@ -2405,6 +2406,7 @@ impl PaneRuntime {
             initial_history_ansi,
             agent_state: _,
             native_source,
+            native_context: _,
             child_session_id: _,
             has_received_input,
             last_input_age_ms,
@@ -3592,6 +3594,23 @@ impl PaneRuntime {
 
     pub fn native_input_evidence(&self) -> native_input::NativeInputEvidence {
         self.native_input.get()
+    }
+
+    /// A newly launched native process has its own queue/composer. Old process
+    /// uncertainty is not evidence of input to this new owner of the same PTY.
+    pub(crate) fn begin_native_process_scope(&self) {
+        self.full_lifecycle_authority_active
+            .store(false, Ordering::Release);
+        self.self_reported_agent_active
+            .store(false, Ordering::Release);
+        if let Ok(mut release) = self.pending_release.lock() {
+            *release = None;
+        }
+        self.reset_agent_detection();
+        self.native_input.set(native_input::NativeInputEvidence {
+            epoch: self.native_input.get().epoch.saturating_add(1),
+            ..Default::default()
+        });
     }
 
     pub fn queue_user_input_submission(

@@ -4,6 +4,11 @@ Never reads or changes the operator's credentials or provider configuration.
 import http.server
 import json
 import threading
+import os
+import pathlib
+import shutil
+import shlex
+import subprocess
 
 class NativeFixture:
     def __init__(self):
@@ -51,3 +56,30 @@ class NativeFixture:
         self.url=f'http://127.0.0.1:{self.server.server_port}'
     def close(self):
         self.server.shutdown(); self.server.server_close()
+
+    def configure_environment(self, env, base, binary, extension):
+        native=base/"native"; native.mkdir()
+        codex_home=native/"codex"; codex_home.mkdir()
+        claude_home=native/"claude"; claude_home.mkdir()
+        pi_home=native/"pi"; pi_home.mkdir()
+        (pi_home/"settings.json").write_text(json.dumps({"defaultProvider":"openai","defaultModel":"gpt-4o","quietStartup":True}))
+        (pi_home/"extensions").mkdir()
+        shutil.copyfile(extension,pi_home/"extensions/herdr-agent-state.ts")
+        (codex_home/"config.toml").write_text(
+            'model_provider="capture"\nmodel="fixture-model"\n[features]\nhooks=true\n[model_providers.capture]\nname="Task-owned local capture"\n'
+            f'base_url="{self.url}/v1"\nwire_api="responses"\nrequires_openai_auth=false\nsupports_websockets=false\n')
+        (claude_home/".claude.json").write_text(json.dumps({"hasCompletedOnboarding":True,"bypassPermissionsModeAccepted":True,"customApiKeyResponses":{"approved":["task-owned-fixture"],"rejected":[]},
+            "projects":{str(base.resolve()):{"hasTrustDialogAccepted":True,"hasCompletedProjectOnboarding":True}}}))
+        env.update(CODEX_HOME=str(codex_home),CLAUDE_CONFIG_DIR=str(claude_home),PI_CODING_AGENT_DIR=str(pi_home),
+                   ANTHROPIC_BASE_URL=self.url,ANTHROPIC_API_KEY="task-owned-fixture",ANTHROPIC_MODEL="claude-sonnet-4-6",
+                   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1",NO_PROXY="127.0.0.1,localhost")
+        for key in ["ANTHROPIC_AUTH_TOKEN","CLAUDE_CODE_OAUTH_TOKEN","OPENAI_API_KEY","CODEX_API_KEY"]:env.pop(key,None)
+        # Vetted task-owned hooks only; native Codex 0.164 has a separate hook-trust prompt.
+        fixture_bin=base/"fixture-bin"; fixture_bin.mkdir()
+        native_codex=shutil.which("codex")
+        (fixture_bin/"codex").write_text('#!/bin/sh\nexec '+shlex.quote(native_codex)+' --dangerously-bypass-hook-trust "$@"\n')
+        (fixture_bin/"codex").chmod(0o700)
+        env["PATH"]=str(fixture_bin)+os.pathsep+env["PATH"]
+        for integration in ["codex","claude"]:
+            install=subprocess.run([str(binary),"integration","install",integration],env=env,capture_output=True,text=True,timeout=15)
+            assert install.returncode==0,install.stderr

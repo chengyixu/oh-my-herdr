@@ -151,18 +151,7 @@ impl App {
         let owns_session = self
             .agent_info(ws, pane)
             .and_then(|agent| agent.agent_session)
-            .is_some_and(|session| {
-                session.source == params.source
-                    && session.agent == params.agent
-                    && match session.kind {
-                        crate::agent_resume::AgentSessionRefKind::Id => {
-                            session.value == params.session_id
-                        }
-                        crate::agent_resume::AgentSessionRefKind::Path => {
-                            session.value == params.session_path
-                        }
-                    }
-            });
+            .is_some_and(|session| params.matches_session(&session));
         let runtime = self.terminal_runtimes.get(&terminal_id);
         let owns_process = runtime.is_some_and(|runtime| {
             super::agents::runtime_hosts_agent(runtime, harness.agent)
@@ -229,18 +218,7 @@ impl App {
         if self
             .agent_info(ws, pane)
             .and_then(|a| a.agent_session)
-            .is_none_or(|s| {
-                s.agent != params.context.agent
-                    || s.source != params.context.source
-                    || match s.kind {
-                        crate::agent_resume::AgentSessionRefKind::Id => {
-                            s.value != params.context.session_id
-                        }
-                        crate::agent_resume::AgentSessionRefKind::Path => {
-                            s.value != params.context.session_path
-                        }
-                    }
-            })
+            .is_none_or(|session| !params.context.matches_session(&session))
         {
             return encode_error(
                 id,
@@ -427,14 +405,17 @@ impl App {
             let profile = self.agent_registry.get(&entry.role).ok_or_else(|| {
                 exchange_error("agent_profile_not_found", "saved profile disappeared")
             })?;
-            let target = params.harness.as_deref().unwrap_or(&profile.harness);
-            if info.agent.as_deref() == Some(target) {
+            let target = params
+                .harness
+                .clone()
+                .unwrap_or_else(|| profile.harness.clone());
+            if info.agent.as_deref() == Some(target.as_str()) {
                 return Err(exchange_error(
                     "same_harness",
                     "this pane already runs the selected integration",
                 ));
             }
-            let harness = crate::harness::find(target).ok_or_else(|| {
+            let harness = crate::harness::find(&target).ok_or_else(|| {
                 exchange_error("invalid_agent_kind", "unknown target integration")
             })?;
             if !harness.available() || !harness.active(&self.agent_registry, false) {
@@ -498,6 +479,9 @@ impl App {
                         "the original native session identity was not captured",
                     )
                 })?;
+            let target_binding = self
+                .replacement_launch_binding(&entry.role, &target)
+                .map_err(|error| exchange_error("native_launch_failed", error))?;
             let export_for_worker = export.clone();
             let cwd = terminal.cwd.clone();
             let (tx, rx) = std::sync::mpsc::channel();
@@ -505,6 +489,11 @@ impl App {
                 .name("native-history-import".into())
                 .spawn(move || {
                     let result = (|| {
+                        harness
+                            .preflight_native_launch(&cwd, target_binding.as_ref())
+                            .map_err(|error| {
+                                exchange_error("native_target_unavailable", error.to_string())
+                            })?;
                         let (snapshot_id, snapshot) = export_for_worker.snapshot()?;
                         if snapshot.cwd.canonicalize().ok() != cwd.canonicalize().ok()
                             || snapshot.cwd.canonicalize().is_err()
@@ -729,7 +718,7 @@ impl App {
                 prepared.imported.retain_for_recovery();
                 // Recover the exact selected branch, even if the source file later
                 // moved its active leaf. The original source file remains intact.
-                if plan.source.agent == "pi" {
+                if plan.source.session_ref.kind == crate::agent_resume::AgentSessionRefKind::Path {
                     plan.source.session_ref = AgentSessionRef::path(
                         prepared
                             .imported
@@ -866,11 +855,7 @@ impl App {
                     std::thread::Builder::new()
                         .name("native-target-ready".into())
                         .spawn(move || {
-                            let result = if context.agent == "pi" {
-                                context.snapshot().map(|_| ())
-                            } else {
-                                context.ready()
-                            };
+                            let result = context.ready();
                             let _ = tx.send(result);
                         })
                         .map_err(|e| exchange_error("native_launch_failed", e.to_string()))?;

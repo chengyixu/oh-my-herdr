@@ -81,7 +81,10 @@ fn pi_records(
 
     let mut parent = Value::Null;
     if let Some(config_msg) = super::historical_source_configuration(history, "pi")? {
-        message_entry(&config_msg, &mut records, &mut parent, stamp, selection)?;
+        let id = storage::entry_identity(session_id, records.len());
+        records.push(json!({"type":"custom_message","customType":"ohmyherdr-source-configuration",
+            "id":id,"parentId":parent,"timestamp":stamp,"display":false,"content":config_msg["content"]}));
+        parent = json!(id);
     }
 
     for message in &history.messages {
@@ -107,6 +110,13 @@ fn pi_records(
         }
     }
 
+    // Preserve historical assistant provenance without letting it select the
+    // target's model. Native model_change is the selection authority on resume.
+    let id = storage::entry_identity(session_id, records.len());
+    records.push(
+        json!({"type":"model_change","id":id,"parentId":parent,"timestamp":stamp,
+        "provider":selection.provider,"modelId":selection.model}),
+    );
     Ok(records)
 }
 
@@ -190,8 +200,9 @@ pub(crate) mod tests {
             &selection,
         )
         .unwrap();
-        assert_eq!(records.len(), 1);
+        assert_eq!(records.len(), 2);
         assert_eq!(records[0]["type"], "session");
+        assert_eq!(records[1]["type"], "model_change");
         assert!(!records.iter().any(|row| row["type"] == "message"));
     }
 

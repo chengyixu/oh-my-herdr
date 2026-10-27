@@ -1,6 +1,7 @@
 """Drive same-pane replacement via the actual generation-1 client endpoint."""
 
 import argparse, datetime, hashlib, json, os, pathlib, shlex, shutil, socket, struct, subprocess, threading, time, uuid, tempfile
+import sys
 
 parser = argparse.ArgumentParser(
     description="Qualify same-pane Pi-to-Codex native history exchange without a model turn"
@@ -44,7 +45,10 @@ parser.add_argument("--local-protocol-fixture", action="store_true", help="Use t
 parser.add_argument("--exercise-turns", action="store_true", help="Send a native model turn through the local fixture before each switch")
 parser.add_argument("--handoff-between-switches", action="store_true", help="Handoff the server while Codex is running, then continue the native chain")
 parser.add_argument("--restart-between-switches", action="store_true", help="Cold-restart the task-owned server after Codex starts, then continue switching")
+parser.add_argument("--fail-native-auth", action="store_true", help="Inject a native account/read failure and require source process/draft preservation")
 options = parser.parse_args()
+if options.fail_native_auth and (not options.local_protocol_fixture or options.fail_target_launch):
+    parser.error("fail-native-auth requires the local fixture and cannot combine with fail-target-launch")
 if options.compacted_source and (options.empty_source or options.verify_model_recall):
     parser.error("compacted-source qualification uses its own active-context markers")
 if options.empty_source and options.verify_model_recall:
@@ -211,31 +215,12 @@ fixture = None
 if options.local_protocol_fixture:
     from native_protocol_fixture import NativeFixture
     fixture=NativeFixture()
-    native=base/"native"; native.mkdir()
-    codex_home=native/"codex"; codex_home.mkdir()
-    claude_home=native/"claude"; claude_home.mkdir()
-    pi_home=native/"pi"; pi_home.mkdir()
-    (pi_home/"settings.json").write_text(json.dumps({"defaultProvider":"openai","defaultModel":"gpt-4o","quietStartup":True}))
-    (pi_home/"extensions").mkdir()
-    shutil.copyfile(extension,pi_home/"extensions/herdr-agent-state.ts")
-    (codex_home/"config.toml").write_text(
-        'model_provider="capture"\nmodel="fixture-model"\n[features]\nhooks=true\n[model_providers.capture]\nname="Task-owned local capture"\n'
-        f'base_url="{fixture.url}/v1"\nwire_api="responses"\nrequires_openai_auth=false\nsupports_websockets=false\n')
-    (claude_home/".claude.json").write_text(json.dumps({"hasCompletedOnboarding":True,"bypassPermissionsModeAccepted":True,"customApiKeyResponses":{"approved":["task-owned-fixture"],"rejected":[]},
-        "projects":{str(base.resolve()):{"hasTrustDialogAccepted":True,"hasCompletedProjectOnboarding":True}}}))
-    env.update(CODEX_HOME=str(codex_home),CLAUDE_CONFIG_DIR=str(claude_home),PI_CODING_AGENT_DIR=str(pi_home),
-               ANTHROPIC_BASE_URL=fixture.url,ANTHROPIC_API_KEY="task-owned-fixture",ANTHROPIC_MODEL="claude-sonnet-4-6",
-               CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1",NO_PROXY="127.0.0.1,localhost")
-    for key in ["ANTHROPIC_AUTH_TOKEN","CLAUDE_CODE_OAUTH_TOKEN","OPENAI_API_KEY","CODEX_API_KEY"]:env.pop(key,None)
-    # Vetted task-owned hooks only; native Codex 0.164 has a separate hook-trust prompt.
-    fixture_bin=base/"fixture-bin"; fixture_bin.mkdir()
-    native_codex=shutil.which("codex")
-    (fixture_bin/"codex").write_text('#!/bin/sh\nexec '+shlex.quote(native_codex)+' --dangerously-bypass-hook-trust "$@"\n')
-    (fixture_bin/"codex").chmod(0o700)
-    env["PATH"]=str(fixture_bin)+os.pathsep+env["PATH"]
-    for integration in ["codex","claude"]:
-        install=subprocess.run([str(binary),"integration","install",integration],env=env,capture_output=True,text=True,timeout=15)
-        assert install.returncode==0,install.stderr
+    fixture.configure_environment(env,base,binary,extension)
+    if options.fail_native_auth:
+        stub=base/"auth-failure-api.py"
+        stub.write_text('import json,sys\nfor line in sys.stdin:\n r=json.loads(line)\n if "id" not in r:continue\n body={"result":{"userAgent":"native-auth-fault"}} if r["method"]=="initialize" else {"error":{"code":-32603,"message":"workspace routing discovery unauthorized (401)"}}\n print(json.dumps({"id":r["id"],**body}),flush=True)\n')
+        native=shutil.which("codex")
+        (base/"fixture-bin/codex").write_text('#!/bin/sh\nif [ "$1" = "--no-daemon" ] && [ "$2" = "app-server" ]; then exec python3 '+shlex.quote(str(stub))+'; fi\nexec '+shlex.quote(native)+' --dangerously-bypass-hook-trust "$@"\n')
 if options.fail_target_launch:
     shim = base / "bin"
     shim.mkdir()
@@ -270,20 +255,8 @@ restore_observer=None
 
 
 def api(method, params={}, expected_error=None):
-    s = socket.socket(socket.AF_UNIX)
-    s.settimeout(45)
-    s.connect(str(api_path))
-    s.sendall(
-        (json.dumps({"id": method, "method": method, "params": params}) + "\n").encode()
-    )
-    data = b""
-    while b"\n" not in data:
-        b = s.recv(65536)
-        if not b:
-            raise RuntimeError("API disconnected")
-        data += b
-    s.close()
-    o = json.loads(data.split(b"\n")[0])
+    from native_test_client import request
+    o=request(api_path,method,params)
     if "error" in o:
         if o["error"]["code"] == expected_error:
             return o["error"]
@@ -537,10 +510,19 @@ try:
     time.sleep(0.3)
     before = api("pane.process_info", {"pane_id": pane})["process_info"]
     report["before_process"] = before
+    pre_switch_source_hash=hashlib.sha256(source.read_bytes()).hexdigest()
     api("pane.send_text", {"pane_id": pane, "text": "TASK-OWNED-UNSENT-DRAFT"})
     refused = endpoint(
         "agent.harness.replace", {"instance_id": instance, "harness": "codex"}
     )
+    if options.fail_native_auth:
+        assert refused.get('error',{}).get('code')=='native_target_unavailable',refused
+        assert api('pane.process_info',{'pane_id':pane})['process_info']['foreground_process_group_id']==before['foreground_process_group_id']
+        screen=api('pane.read',{'pane_id':pane,'source':'detection','lines':80})['read']['text']
+        assert 'TASK-OWNED-UNSENT-DRAFT' in screen,screen
+        assert hashlib.sha256(source.read_bytes()).hexdigest()==pre_switch_source_hash
+        report.update(success=True,auth_rejection_preserved_source=True,preflight_refusal=refused)
+        raise SystemExit(0)
     assert refused.get("error", {}).get("code") == "source_has_draft", refused
     assert (
         api("pane.process_info", {"pane_id": pane})["process_info"][
@@ -730,6 +712,7 @@ try:
         required=["COMPACTED-CURRENT-CONTEXT","COMPACTED-SOURCE-SUMMARY"] if options.compacted_source else [oldest_marker,tool_marker]
         excluded=[oldest_marker,tool_marker,"EXCLUDED-DIAGNOSTIC"] if options.compacted_source else []
         report["native_context_proofs"].append(qualify(target,checkpoint["target_path"],base,env,fixture,required,excluded))
+        print("native context verified: "+target,file=sys.stderr,flush=True)
         if options.exercise_turns and target != "pi":
             start=len(fixture.requests)
             api("agent.prompt",{"target":pane,"text":"Without tools, reply CAPTURED."})
