@@ -229,7 +229,7 @@ if options.fail_target_launch:
     if not native_codex:
         raise SystemExit("Codex must be installed before qualification")
     command.write_text(
-        '#!/bin/sh\nif [ "$1" = "--version" ] || [ "$1" = "app-server" ]; then exec '
+        '#!/bin/sh\nif [ "$1" = "--version" ] || [ "$1" = "app-server" ] || { [ "$1" = "--no-daemon" ] && [ "$2" = "app-server" ]; }; then exec '
         + shlex.quote(native_codex)
         + ' "$@"; fi\necho task-owned-target-launch-failure >&2\nexit 23\n'
     )
