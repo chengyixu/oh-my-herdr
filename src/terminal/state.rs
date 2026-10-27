@@ -137,6 +137,9 @@ pub struct TerminalState {
     pub agent_metadata: HashMap<String, AgentMetadata>,
     pub metadata_tokens: crate::metadata_tokens::MetadataTokens,
     pub persisted_agent_session: Option<crate::agent_resume::PersistedAgentSession>,
+    /// Last accepted exact native conversation for cold restore of this retained
+    /// terminal. This is recovery data, never evidence of a live agent or owner.
+    cold_restore_agent_session: Option<crate::agent_resume::PersistedAgentSession>,
     pub(crate) native_context:
         Option<crate::integration::native_context::NativeContextRegistration>,
     pub(crate) native_context_input_baseline:
@@ -186,6 +189,7 @@ impl TerminalState {
             agent_metadata: HashMap::new(),
             metadata_tokens: crate::metadata_tokens::MetadataTokens::default(),
             persisted_agent_session: None,
+            cold_restore_agent_session: None,
             native_context: None,
             native_context_input_baseline: None,
             native_replacement_recovery_session: None,
@@ -263,6 +267,13 @@ impl TerminalState {
                 .insert(snapshot.authority.source.clone(), sequence);
         }
         self.detected_agent = crate::detect::parse_agent_label(&snapshot.authority.agent_label);
+        if let Some(reference) = &snapshot.authority.session_ref {
+            self.remember_cold_restore_session(&crate::agent_resume::PersistedAgentSession {
+                source: snapshot.authority.source.clone(),
+                agent: snapshot.authority.agent_label.clone(),
+                session_ref: reference.clone(),
+            });
+        }
         self.state = snapshot.authority.state;
         self.hook_authority = Some(snapshot.authority);
         self.agent_process_acquisition_pending = snapshot.acquisition_pending;
@@ -805,6 +816,13 @@ impl TerminalState {
                 }
             }
         }
+        if let Some(reference) = &session_ref {
+            self.remember_cold_restore_session(&crate::agent_resume::PersistedAgentSession {
+                source: source.clone(),
+                agent: agent_label.clone(),
+                session_ref: reference.clone(),
+            });
+        }
         self.persisted_agent_session = None;
         self.hook_authority = Some(HookAuthority {
             source,
@@ -1243,7 +1261,7 @@ impl TerminalState {
         for (source, agent_label, session_ref, pending) in validated_replacement_sessions {
             self.forget_stale_full_lifecycle_hook_session(&source, &agent_label, &session_ref);
             self.reconcile_agent_name_owner(&agent_label, Some(&session_ref));
-            self.persisted_agent_session = Some(crate::agent_resume::PersistedAgentSession {
+            self.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
                 source: source.clone(),
                 agent: agent_label,
                 session_ref,
@@ -1447,10 +1465,40 @@ impl TerminalState {
             == ("herdr:opencode", "opencode", Some("select"), None)
     }
 
+    fn remember_cold_restore_session(
+        &mut self,
+        session: &crate::agent_resume::PersistedAgentSession,
+    ) {
+        if crate::agent_resume::is_official_agent_source(&session.source, &session.agent) {
+            self.cold_restore_agent_session = Some(session.clone());
+        }
+    }
+
+    /// Snapshot recovery may outlive runtime ownership. Callers deciding whether
+    /// an agent is live must continue to use the live state and session APIs.
+    pub(crate) fn cold_restore_session(
+        &self,
+    ) -> Option<crate::agent_resume::PersistedAgentSession> {
+        self.hook_authority
+            .as_ref()
+            .and_then(|authority| {
+                authority.session_ref.as_ref().map(|reference| {
+                    crate::agent_resume::PersistedAgentSession {
+                        source: authority.source.clone(),
+                        agent: authority.agent_label.clone(),
+                        session_ref: reference.clone(),
+                    }
+                })
+            })
+            .or_else(|| self.persisted_agent_session.clone())
+            .or_else(|| self.cold_restore_agent_session.clone())
+    }
+
     pub fn set_persisted_agent_session(
         &mut self,
         session: crate::agent_resume::PersistedAgentSession,
     ) {
+        self.remember_cold_restore_session(&session);
         self.persisted_agent_session = Some(session);
     }
 
@@ -1690,7 +1738,7 @@ impl TerminalState {
         if self.managed_agent_launch_session.as_ref() == Some(&persisted_session) {
             self.managed_agent_launch_session = None;
         }
-        self.persisted_agent_session = Some(persisted_session);
+        self.set_persisted_agent_session(persisted_session);
         let current_session = self.current_session_identity_for_persistence();
         if previous_session.is_some() && previous_session != current_session {
             // Rebinding can expose a cached Working screen; only a fresh report ends acquisition.
@@ -2545,6 +2593,55 @@ mod tests {
         terminal.set_detected_state(Some(Agent::Codex), AgentState::Idle);
         terminal.reconcile_managed_agent_at(now + Duration::from_secs(4), false);
         assert!(terminal.managed_agent_interactive_ready());
+    }
+
+    #[test]
+    fn cold_restore_remembers_process_validated_deferred_session_reports() {
+        let mut terminal = test_terminal();
+        let now = Instant::now();
+        let reference = crate::agent_resume::AgentSessionRef::path(test_session_path(
+            "deferred-native-pi.jsonl",
+        ))
+        .unwrap();
+        assert!(terminal
+            .set_agent_session_ref_for_session_start(
+                "herdr:pi".into(),
+                "pi".into(),
+                Some(reference.clone()),
+                Some(10),
+                Some("startup".into())
+            )
+            .is_none());
+        assert!(terminal
+            .set_hook_authority_at(
+                "herdr:pi".into(),
+                "pi".into(),
+                AgentState::Idle,
+                None,
+                Some(reference.clone()),
+                Some(11),
+                now
+            )
+            .is_none());
+        terminal.set_detected_agent_process_at(Agent::Pi, Instant::now());
+        assert_eq!(
+            terminal
+                .current_session_identity_for_persistence()
+                .unwrap()
+                .3,
+            reference.value
+        );
+        terminal.clear_agent_runtime_identity_after_respawn();
+        assert!(terminal.effective_agent_label().is_none());
+        assert_eq!(
+            terminal.cold_restore_session(),
+            Some(crate::agent_resume::PersistedAgentSession {
+                source: "herdr:pi".into(),
+                agent: "pi".into(),
+                session_ref: reference,
+            }),
+            "every accepted native-session path must retain its exact recovery identity"
+        );
     }
 
     #[test]

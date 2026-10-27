@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.11] - 2026-10-28
+
+### Fixed
+- Retained panes keep their last accepted exact native conversation after an agent process exits, releases live status, or emits a status report without a session reference. Cold restart resumes that conversation without treating a stopped agent as live. Closing a pane removes its recovery data; a newly accepted native conversation replaces the previous reference.
+- Missing native session files stop cold restore with a visible error and retain the exact reference, instead of launching a replacement conversation. Failed restores clear saved live-agent hints while preserving recovery data.
+- Unnamed native cold restores use the same startup and readiness tracking as named sessions. Saved detection hints cannot acknowledge the new process, and no display name is invented.
+- Added a direct native cold-restart verification command covering retained Pi, Claude and Codex panes, exact session ownership, hidden workspaces, and outgoing Claude/Codex model context after restart. Cold restore is verified with Claude Code 2.1.311; history imports keep their separate 2.1.310 qualification gate. Switch-source qualification remains limited to the three harnesses qualified in 0.9.10.
+
 ## [0.9.10] - 2026-10-27
 
 ### Fixed

@@ -372,24 +372,13 @@ fn capture_tab(
                     value: session.session_ref.value.clone(),
                 });
             }
-            if let Some(authority) = terminal.hook_authority.as_ref() {
-                if let Some(session_ref) = authority.session_ref.as_ref() {
-                    return Some(PaneAgentSessionSnapshot {
-                        source: authority.source.clone(),
-                        agent: authority.agent_label.clone(),
-                        kind: session_ref.kind,
-                        value: session_ref.value.clone(),
-                    });
-                }
-            }
             terminal
-                .persisted_agent_session
-                .as_ref()
+                .cold_restore_session()
                 .map(|session| PaneAgentSessionSnapshot {
-                    source: session.source.clone(),
-                    agent: session.agent.clone(),
+                    source: session.source,
+                    agent: session.agent,
                     kind: session.session_ref.kind,
-                    value: session.session_ref.value.clone(),
+                    value: session.session_ref.value,
                 })
         });
         let agent_resume = terminal
@@ -1401,6 +1390,189 @@ mod tests {
             crate::agent_resume::AgentSessionRefKind::Id
         );
         assert_eq!(agent_session.value, "opencode-session");
+    }
+
+    #[test]
+    fn retained_pane_cold_restore_keeps_exact_session_after_native_exit() {
+        for agent in [
+            crate::detect::Agent::Pi,
+            crate::detect::Agent::Claude,
+            crate::detect::Agent::Codex,
+        ] {
+            for release in [false, true] {
+                let mut state = state_with_workspaces(&["retained"]);
+                state.ensure_test_terminals();
+                let pane = state.workspaces[0].tabs[0].root_pane;
+                let id = state.workspaces[0].tabs[0].panes[&pane]
+                    .attached_terminal_id
+                    .clone();
+                let label = crate::detect::agent_label(agent);
+                let source = format!("herdr:{label}");
+                let reference = if agent == crate::detect::Agent::Pi {
+                    crate::agent_resume::AgentSessionRef::path(test_session_path("exact-pi.jsonl"))
+                        .unwrap()
+                } else {
+                    crate::agent_resume::AgentSessionRef::id(format!("exact-{label}")).unwrap()
+                };
+                let terminal = state.terminals.get_mut(&id).unwrap();
+                terminal.set_detected_state(Some(agent), crate::detect::AgentState::Idle);
+                terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
+                    source: source.clone(),
+                    agent: label.into(),
+                    session_ref: reference.clone(),
+                });
+                if release {
+                    terminal
+                        .release_agent_with_mutation(&source, label, None)
+                        .unwrap();
+                }
+                terminal.set_detected_state_with_visible_blocker(
+                    Some(agent),
+                    crate::detect::AgentState::Unknown,
+                    false,
+                    false,
+                    true,
+                );
+                terminal.set_detected_state(None, crate::detect::AgentState::Unknown);
+                assert!(
+                    terminal.effective_agent_label().is_none(),
+                    "stopped agents must remain stopped"
+                );
+                assert!(terminal.persisted_agent_session.is_none());
+                let snapshot = capture_from_state(&state);
+                let saved = snapshot.workspaces[0].tabs[0].panes[&pane.raw()]
+                    .agent_session
+                    .as_ref()
+                    .expect("retaining the pane must retain its exact cold-resume conversation");
+                assert_eq!(
+                    (&saved.source, &saved.agent, saved.kind, &saved.value),
+                    (
+                        &source,
+                        &label.to_string(),
+                        reference.kind,
+                        &reference.value
+                    )
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn retained_pane_cold_restore_keeps_session_across_sessionless_status() {
+        let mut state = state_with_workspaces(&["retained"]);
+        state.ensure_test_terminals();
+        let pane = state.workspaces[0].tabs[0].root_pane;
+        let id = state.workspaces[0].tabs[0].panes[&pane]
+            .attached_terminal_id
+            .clone();
+        let terminal = state.terminals.get_mut(&id).unwrap();
+        terminal.set_detected_state(
+            Some(crate::detect::Agent::Pi),
+            crate::detect::AgentState::Idle,
+        );
+        let reference =
+            crate::agent_resume::AgentSessionRef::path(test_session_path("exact-pi.jsonl"))
+                .unwrap();
+        terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
+            source: "herdr:pi".into(),
+            agent: "pi".into(),
+            session_ref: reference.clone(),
+        });
+        terminal
+            .set_hook_authority_with_session_ref(
+                "herdr:pi".into(),
+                "pi".into(),
+                crate::detect::AgentState::Idle,
+                None,
+                Some(reference.clone()),
+                Some(1),
+            )
+            .unwrap();
+        terminal
+            .set_hook_authority_with_session_ref(
+                "herdr:pi".into(),
+                "pi".into(),
+                crate::detect::AgentState::Idle,
+                None,
+                None,
+                Some(2),
+            )
+            .unwrap();
+        assert!(terminal.persisted_agent_session.is_none());
+        let snapshot = capture_from_state(&state);
+        let saved = snapshot.workspaces[0].tabs[0].panes[&pane.raw()]
+            .agent_session
+            .as_ref()
+            .unwrap();
+        assert_eq!(saved.value, reference.value);
+    }
+
+    #[test]
+    fn cold_restore_ignores_stale_reports_and_unconfirmed_replacement_launches() {
+        let mut state = state_with_workspaces(&["retained"]);
+        state.ensure_test_terminals();
+        let pane = state.workspaces[0].tabs[0].root_pane;
+        let id = state.workspaces[0].tabs[0].panes[&pane]
+            .attached_terminal_id
+            .clone();
+        let terminal = state.terminals.get_mut(&id).unwrap();
+        let source = crate::agent_resume::PersistedAgentSession {
+            source: "herdr:pi".into(),
+            agent: "pi".into(),
+            session_ref: crate::agent_resume::AgentSessionRef::path(test_session_path(
+                "source-pi.jsonl",
+            ))
+            .unwrap(),
+        };
+        terminal.set_persisted_agent_session(source.clone());
+        terminal.clear_agent_runtime_identity_after_respawn();
+        let now = std::time::Instant::now();
+        terminal.begin_managed_agent(
+            "replacement".into(),
+            crate::detect::Agent::Codex,
+            None,
+            now,
+            std::time::Duration::ZERO,
+            std::time::Duration::from_secs(1),
+        );
+        terminal.set_managed_agent_launch_session(crate::agent_resume::PersistedAgentSession {
+            source: "herdr:codex".into(),
+            agent: "codex".into(),
+            session_ref: crate::agent_resume::AgentSessionRef::id("unconfirmed-target").unwrap(),
+        });
+        assert!(terminal.reconcile_managed_agent_at(now + std::time::Duration::from_secs(2), false));
+        assert_eq!(terminal.cold_restore_session(), Some(source));
+        terminal.set_detected_state(
+            Some(crate::detect::Agent::Claude),
+            crate::detect::AgentState::Idle,
+        );
+        terminal
+            .set_agent_session_ref_for_session_start(
+                "herdr:claude".into(),
+                "claude".into(),
+                crate::agent_resume::AgentSessionRef::id("accepted-new-conversation"),
+                Some(20),
+                Some("resume".into()),
+            )
+            .unwrap();
+        assert!(terminal
+            .set_hook_authority_with_session_ref(
+                "herdr:pi".into(),
+                "pi".into(),
+                crate::detect::AgentState::Idle,
+                None,
+                crate::agent_resume::AgentSessionRef::path(test_session_path("stale-pi.jsonl")),
+                Some(21)
+            )
+            .is_none());
+        terminal.clear_agent_runtime_identity_after_respawn();
+        let snapshot = capture_from_state(&state);
+        let saved = snapshot.workspaces[0].tabs[0].panes[&pane.raw()]
+            .agent_session
+            .as_ref()
+            .unwrap();
+        assert_eq!(saved.agent, "claude");
+        assert_eq!(saved.value, "accepted-new-conversation");
     }
 
     #[test]

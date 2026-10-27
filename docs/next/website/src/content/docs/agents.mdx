@@ -88,6 +88,10 @@ These agents report their own state to Herdr. There is nothing to install; run t
 
 An agent that also reports its resume command comes back in the same session after a Herdr server restart.
 
+For native integrations, a retained pane also keeps its last accepted exact session reference after the native process exits or releases its live status. A cold server restart resumes that conversation even if the pane had returned to its shell. Recovery data does not mark the stopped agent as live and does not restart it during the running server session. Closing the pane removes its recovery reference. A newly accepted native conversation replaces the old reference; late or rejected reports do not.
+
+Cold restore uses the saved native ID or file, never the latest session in a directory. If the saved working directory or exact native session file is missing, the pane retains the reference and reports the restore error instead of opening a new conversation. Set `[session] resume_agents_on_restore = false` to restore shells without resuming agents.
+
 If you build a coding agent, [Add Herdr support to your agent](/docs/add-herdr-support/) shows how to join this list. It takes a few calls to Herdr's CLI or socket, and no change to Herdr.
 
 ## How status works

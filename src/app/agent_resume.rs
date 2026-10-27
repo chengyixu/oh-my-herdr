@@ -238,6 +238,21 @@ impl App {
             return false;
         }
 
+        let missing_native_file = self
+            .state
+            .terminals
+            .get(&terminal_id)
+            .and_then(|terminal| terminal.cold_restore_session())
+            .is_some_and(|session| {
+                session.agent == plan.agent
+                    && session.session_ref.kind == crate::agent_resume::AgentSessionRefKind::Path
+                    && !std::path::Path::new(&session.session_ref.value).is_file()
+            });
+        if missing_native_file {
+            self.fail_pending_agent_resume(&terminal_id, "Saved native session file is unavailable. Restore the exact file before resuming this pane.".into());
+            return true;
+        }
+
         let command_argv = crate::harness::find(&plan.agent).map_or_else(
             || Ok(plan.argv.clone()),
             |harness| harness.scope_launch_environment(plan.argv.clone()),
@@ -283,11 +298,11 @@ impl App {
         };
 
         if !cwd.is_dir() {
-            if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
-                terminal.pending_agent_resume_plan = None;
-                terminal.restore_error = Some("Saved directory is unavailable. Restore the directory and restart this session.".into());
-                terminal.revision = terminal.revision.saturating_add(1);
-            }
+            self.fail_pending_agent_resume(
+                &terminal_id,
+                "Saved directory is unavailable. Restore the directory and restart this session."
+                    .into(),
+            );
             return true;
         }
 
@@ -314,11 +329,7 @@ impl App {
                     err = %err,
                     "failed to start shell for deferred agent resume"
                 );
-                if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
-                    terminal.pending_agent_resume_plan = None;
-                    terminal.restore_error = Some(format!("Could not start the saved shell: {err}. Fix the shell configuration and restart this session."));
-                    terminal.revision = terminal.revision.saturating_add(1);
-                }
+                self.fail_pending_agent_resume(&terminal_id, format!("Could not start the saved shell: {err}. Fix the shell configuration and restart this session."));
                 return true;
             }
         };
@@ -349,12 +360,20 @@ impl App {
         if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
             terminal.pending_agent_resume_plan = None;
             terminal.respawn_shell_on_exit = false;
-            if let (Some(name), Some(kind)) = (
-                terminal.agent_name.clone(),
-                crate::detect::parse_agent_label(&plan.agent),
-            ) {
+            if let Some(kind) = crate::detect::parse_agent_label(&plan.agent) {
+                let name = terminal.agent_name.clone().unwrap_or_default();
                 let instance = terminal.live_roster_instance_id().map(str::to_owned);
                 let session = terminal.persisted_agent_session.clone();
+                // Restored detection hints cannot acknowledge a new process.
+                terminal.set_detected_state_with_screen_signals_at(
+                    None,
+                    crate::detect::AgentState::Unknown,
+                    false,
+                    false,
+                    false,
+                    false,
+                    Instant::now(),
+                );
                 terminal.begin_managed_agent(
                     name,
                     kind,
@@ -369,6 +388,26 @@ impl App {
             }
         }
         true
+    }
+
+    fn fail_pending_agent_resume(&mut self, id: &crate::terminal::TerminalId, message: String) {
+        if let Some(terminal) = self.state.terminals.get_mut(id) {
+            terminal.pending_agent_resume_plan = None;
+            // Saved detection/roster hints are not a process when startup failed.
+            // Keep the exact recovery reference while clearing only live state.
+            terminal.set_detected_state_with_screen_signals_at(
+                None,
+                crate::detect::AgentState::Unknown,
+                false,
+                false,
+                false,
+                false,
+                Instant::now(),
+            );
+            terminal.clear_agent_name();
+            terminal.restore_error = Some(message);
+            terminal.revision = terminal.revision.saturating_add(1);
+        }
     }
 }
 
@@ -586,6 +625,103 @@ mod tests {
             assert!(!app.has_pending_agent_resumes());
             assert!(!app.start_pending_agent_resume_for_terminal(&terminal_id, 24, 80, true));
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn missing_exact_native_resume_file_never_opens_a_new_conversation() {
+        let mut app = test_app();
+        let workspace = crate::workspace::Workspace::test_new("missing-native-file");
+        let pane = workspace.tabs[0].root_pane;
+        let id = workspace.terminal_id(pane).unwrap().clone();
+        app.state.workspaces = vec![workspace];
+        app.state.active = Some(0);
+        app.state.ensure_test_terminals();
+        let missing = std::env::current_dir()
+            .unwrap()
+            .join("__missing_exact_native_session__.jsonl");
+        assert!(!missing.exists());
+        let session = crate::agent_resume::PersistedAgentSession {
+            source: "herdr:pi".into(),
+            agent: "pi".into(),
+            session_ref: crate::agent_resume::AgentSessionRef::path(missing.display().to_string())
+                .unwrap(),
+        };
+        let terminal = app.state.terminals.get_mut(&id).unwrap();
+        terminal.set_persisted_agent_session(session.clone());
+        terminal.restore_managed_agent(
+            "saved-owner".into(),
+            crate::detect::Agent::Pi,
+            Some("saved-instance".into()),
+        );
+        terminal.set_detected_state(
+            Some(crate::detect::Agent::Pi),
+            crate::detect::AgentState::Idle,
+        );
+        terminal.pending_agent_resume_plan = Some(crate::agent_resume::AgentResumePlan {
+            agent: "pi".into(),
+            argv: marker_resume_test_argv(),
+            dedupe_key: "missing-exact-file".into(),
+        });
+        assert!(app.start_pending_agent_resume_for_terminal(&id, 24, 80, true));
+        assert!(
+            app.terminal_runtimes.get(&id).is_none(),
+            "do not start a replacement conversation for a missing exact file"
+        );
+        let terminal = &app.state.terminals[&id];
+        assert_eq!(terminal.cold_restore_session(), Some(session));
+        assert!(terminal.effective_agent_label().is_none());
+        assert!(terminal.managed_agent_kind().is_none());
+        assert!(terminal
+            .restore_error
+            .as_deref()
+            .is_some_and(|message| message.contains("session file")));
+        assert!(!app.has_pending_agent_resumes());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unnamed_cold_restore_tracks_native_readiness_without_inventing_a_name() {
+        let mut app = test_app();
+        let workspace = crate::workspace::Workspace::test_new("unnamed-native");
+        let pane = workspace.tabs[0].root_pane;
+        let id = workspace.terminal_id(pane).unwrap().clone();
+        app.state.workspaces = vec![workspace];
+        app.state.active = Some(0);
+        app.state.ensure_test_terminals();
+        let terminal = app.state.terminals.get_mut(&id).unwrap();
+        terminal.set_detected_state(
+            Some(crate::detect::Agent::Codex),
+            crate::detect::AgentState::Idle,
+        );
+        terminal.pending_agent_resume_plan = Some(crate::agent_resume::AgentResumePlan {
+            agent: "codex".into(),
+            argv: long_running_test_argv(),
+            dedupe_key: "unnamed-native".into(),
+        });
+        assert!(app.start_pending_agent_resume_for_terminal(&id, 24, 80, true));
+        let terminal = app.state.terminals.get_mut(&id).unwrap();
+        assert_eq!(
+            terminal.managed_agent_kind(),
+            Some(crate::detect::Agent::Codex)
+        );
+        assert!(terminal.agent_name.is_none());
+        assert!(
+            terminal.effective_agent_label().is_none(),
+            "saved metadata is not native process evidence"
+        );
+        assert!(terminal.managed_agent_launch_pending());
+        assert!(!terminal.managed_agent_interactive_ready());
+        terminal.set_detected_state(
+            Some(crate::detect::Agent::Codex),
+            crate::detect::AgentState::Unknown,
+        );
+        terminal.observe_codex_prompt_ready(true);
+        terminal
+            .reconcile_managed_agent_at(Instant::now() + std::time::Duration::from_secs(5), false);
+        assert!(terminal.managed_agent_interactive_ready());
+        assert!(terminal.agent_name.is_none());
+        app.terminal_runtimes.remove(&id).unwrap().shutdown();
     }
 
     #[cfg(unix)]

@@ -23,6 +23,10 @@ Verified native versions: Codex 0.164.0, Claude Code 2.1.310, and Pi 1.4.0
 with integration v11, native context edits and session projection support.
 The tests use real native CLIs and task-owned local HTTP protocol fixtures. No
 operator model, provider, account, or credential configuration is changed.
+Retained-pane cold restoration is also verified with Claude Code 2.1.311.
+That resumes an existing native conversation; Claude history imports retain
+their separate 2.1.310 qualification gate. A newer unqualified importer version
+refuses the switch before source exit.
 
 ## Reproducible checks
 
@@ -77,6 +81,13 @@ Compacted runs additionally require the active summary and retained context in
 native requests, and prohibit resurrection of old messages and excluded
 execution diagnostics. Complete older history must still exist in the target
 file. A refusal is a failed transition, not successful pair coverage.
+
+Retained-pane cold restore has a separate native reproduction. It terminates only task-owned native foreground process groups while retaining their shells, stops the server, verifies the saved exact references, then cold-starts the server. Fifteen Pi panes exercise background restoration alongside native Claude and Codex. Pi must render its original conversation marker in a real foreground native process; Claude and Codex must also send the original marker in their next model request to the local fixture. Saved metadata alone cannot pass this check.
+
+```sh
+python3 scripts/verify_native_cold_restore.py --binary "$BINARY" \
+  --pi-panes 15 --output ./proof/retained-cold-restore
+```
 
 ## Deliberate refusal boundaries
 
