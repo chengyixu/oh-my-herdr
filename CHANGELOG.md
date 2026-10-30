@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.9.12] - 2026-10-28
+
+### Fixed
+- Pi sessions with interrupted historical tool calls can switch when the exact native active context is complete. Interrupted calls remain identifiable historical content, with original source records retained in the private archive; active unfinished calls and ambiguous historical records still refuse before source exit.
+- Claude Code 2.1.311 native history import is qualified alongside the previously supported versions.
+
 ## [0.9.11] - 2026-10-28
 
 ### Fixed

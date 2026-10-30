@@ -362,12 +362,63 @@ pub(crate) fn read_pi_snapshot(
     }
     let mut history = normalize_pi_messages(&snapshot.header, &projected)?;
     let active = normalize_pi_messages(&snapshot.header, &snapshot.model_messages)?;
+    // Only the native active projection can prove that interrupted historical
+    // tool calls are no longer pending. Never alter an active call/result pair.
+    validate_tool_pairs(&active.messages)?;
     if history.messages != active.messages {
+        history.messages = neutralize_interrupted_recorded_calls(&history.messages)?;
         history.model_messages = Some(active.messages);
     }
     history.source_bytes = bytes;
     history.source_context = Some(serde_json::to_value(snapshot)?);
     Ok(history)
+}
+
+/// Keep aborted/error tool calls as inert, explicit historical content. Native
+/// source bytes and the exact integration snapshot remain in private archives.
+/// Other unmatched calls and results remain unqualified and are refused.
+fn neutralize_interrupted_recorded_calls(messages: &[Value]) -> io::Result<Vec<Value>> {
+    let mut pending = HashMap::<String, (usize, usize, bool)>::new();
+    for (message_index, message) in messages.iter().enumerate() {
+        for (block_index, block) in message_blocks(message)?.into_iter().enumerate() {
+            if block["type"] == "toolCall" {
+                let id = block["id"]
+                    .as_str()
+                    .ok_or_else(|| invalid("native tool call identity missing"))?;
+                let interrupted =
+                    matches!(message["stopReason"].as_str(), Some("aborted" | "error"));
+                if pending
+                    .insert(id.to_owned(), (message_index, block_index, interrupted))
+                    .is_some()
+                {
+                    return Err(invalid("duplicate pending source tool call identity"));
+                }
+            }
+        }
+        if message["role"] == "toolResult" {
+            let id = message["toolCallId"]
+                .as_str()
+                .ok_or_else(|| invalid("native tool result identity is missing"))?;
+            if pending.remove(id).is_none() {
+                return Err(invalid("source tool result has no matching call"));
+            }
+        }
+    }
+    if pending.values().any(|(_, _, interrupted)| !interrupted) {
+        return Err(invalid(
+            "native session contains unfinished tool calls; wait for completion",
+        ));
+    }
+    let mut recorded = messages.to_vec();
+    for (message_index, block_index, _) in pending.into_values() {
+        let block = recorded[message_index]["content"]
+            .as_array_mut()
+            .and_then(|blocks| blocks.get_mut(block_index))
+            .ok_or_else(|| invalid("interrupted tool call content is invalid"))?;
+        let body = serde_json::to_string(block)?;
+        *block = json!({"type":"text", "text":format!("[Historical interrupted tool call; result not recorded; do not execute]\n{body}")});
+    }
+    Ok(recorded)
 }
 
 fn normalize_pi_messages(header: &Value, projected: &[Value]) -> io::Result<NativeHistory> {
@@ -1305,6 +1356,68 @@ mod tests {
         );
         drop(imported);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn interrupted_historical_tool_calls_do_not_block_completed_active_context() {
+        let mut snapshot = compacted_snapshot();
+        let orphan = json!({"type":"toolCall","id":"interrupted-id","name":"read","arguments":{"path":"original-argument-marker"}});
+        snapshot.branch.insert(
+            1,
+            json!({"type":"message","id":"interrupted","parentId":null,
+            "message":{"role":"assistant","stopReason":"error","content":[orphan.clone()]}}),
+        );
+        let history = read_pi_snapshot(&snapshot).unwrap();
+        assert!(String::from_utf8_lossy(&history.source_bytes).contains("original-argument-marker"));
+        let recorded = serde_json::to_string(&history.messages).unwrap();
+        assert!(recorded.contains("original-argument-marker"));
+        let codex = codex_records(
+            &history,
+            "target",
+            Path::new("/tmp"),
+            "2026-10-18T00:00:00Z",
+            "openai",
+        )
+        .unwrap();
+        let replacement = codex.iter().find(|r| r["type"] == "compacted").unwrap();
+        assert!(!serde_json::to_string(&replacement)
+            .unwrap()
+            .contains("interrupted-id"));
+        validate_tool_pairs(&history.messages).unwrap();
+        snapshot
+            .model_messages
+            .push(json!({"role":"assistant","stopReason":"toolUse","content":[orphan]}));
+        assert!(
+            read_pi_snapshot(&snapshot).is_err(),
+            "unfinished active work must still refuse switching"
+        );
+    }
+
+    #[test]
+    fn interrupted_recorded_calls_preserve_completed_id_reuse_and_refuse_ambiguous_work() {
+        let call = |id: &str| json!({"type":"toolCall","id":id,"name":"read","arguments":{"path":"retained"}});
+        let messages = vec![
+            json!({"role":"assistant","stopReason":"toolUse","content":[call("same")]}),
+            json!({"role":"toolResult","toolCallId":"same","content":"complete"}),
+            json!({"role":"assistant","stopReason":"aborted","content":[call("same")]}),
+        ];
+        let normalized = neutralize_interrupted_recorded_calls(&messages).unwrap();
+        assert_eq!(normalized[0]["content"][0]["type"], "toolCall");
+        assert_eq!(normalized[2]["content"][0]["type"], "text");
+        assert!(normalized[2]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("retained"));
+        let mut ambiguous = messages.clone();
+        ambiguous[2]["stopReason"] = json!("toolUse");
+        assert!(neutralize_interrupted_recorded_calls(&ambiguous).is_err());
+        ambiguous[2]["stopReason"] = json!("error");
+        ambiguous.push(json!({"role":"assistant","stopReason":"error","content":[call("same")]}));
+        assert!(neutralize_interrupted_recorded_calls(&ambiguous).is_err());
+        assert!(neutralize_interrupted_recorded_calls(&[
+            json!({"role":"toolResult","toolCallId":"unknown","content":"x"})
+        ])
+        .is_err());
     }
 
     #[test]

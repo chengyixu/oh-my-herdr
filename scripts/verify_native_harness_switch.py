@@ -40,6 +40,7 @@ parser.add_argument(
     "--compacted-source", action="store_true",
     help="Qualify full recorded history separately from the native active-context checkpoint",
 )
+parser.add_argument("--interrupted-source", action="store_true", help="Include an interrupted historical native tool call before compaction")
 parser.add_argument("--chain", default="codex", help="Comma-separated target sequence after Pi, e.g. codex,claude,pi")
 parser.add_argument("--local-protocol-fixture", action="store_true", help="Use task-owned native homes and local API capture; operator provider/auth remain untouched")
 parser.add_argument("--exercise-turns", action="store_true", help="Send a native model turn through the local fixture before each switch")
@@ -185,6 +186,15 @@ records.append(
         },
     }
 )
+if options.interrupted_source:
+    if not options.compacted_source:
+        parser.error("interrupted-source requires compacted-source")
+    interrupted = uuid.uuid4().hex[:8]
+    records.append({"type":"message", "id":interrupted, "parentId":eid, "timestamp":stamp,
+        "message":{"role":"assistant","content":[{"type":"toolCall","id":"historic-interrupted","name":"read","arguments":{"path":"HISTORICAL-INTERRUPTED-ARGS"}}],
+                   "timestamp":int(time.time()*1000),"api":"openai-responses","provider":source_provider,"model":source_model,
+                   "usage":usage,"stopReason":"error","errorMessage":"historical interruption"}})
+    eid = interrupted
 if options.compacted_source:
     kept = uuid.uuid4().hex[:8]
     records.append({"type": "message", "id": kept, "parentId": eid, "timestamp": stamp,
@@ -662,6 +672,11 @@ try:
             assert "EXCLUDED-DIAGNOSTIC" not in model_context
         visible = json.dumps([record for record in native_records if record["type"] == "event_msg"])
         assert oldest_marker in visible and tool_marker in visible and "EXCLUDED-DIAGNOSTIC" in visible
+        if options.interrupted_source:
+            assert "HISTORICAL-INTERRUPTED-ARGS" in visible
+            assert "HISTORICAL-INTERRUPTED-ARGS" not in active
+            archive = pathlib.Path(recovery["source_archive"]).read_text()
+            assert "HISTORICAL-INTERRUPTED-ARGS" in archive and '"toolCall"' in archive
         report["native_active_checkpoint_verified"] = True
     if options.verify_model_recall:
         api(
@@ -784,6 +799,8 @@ try:
         recovery=json.loads((api_path.parent/"agents.json").read_text())["native_harness_recovery"][instance]
         loaded=pathlib.Path(recovery["target_path"]).read_text()
         assert oldest_marker in loaded and tool_marker in loaded, "chain lost historical markers"
+        if options.interrupted_source:
+            assert "HISTORICAL-INTERRUPTED-ARGS" in loaded, "chain lost interrupted historical tool arguments"
         verify_target_context(target)
     report["success"] = True
 except Exception as error:

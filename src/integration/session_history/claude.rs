@@ -21,7 +21,7 @@ pub(crate) fn import_claude_history(
     let version = super::super::native_process::capture("claude", &["--version"], cwd, 4096)?;
     if !matches!(
         String::from_utf8_lossy(&version).trim(),
-        "2.1.302 (Claude Code)" | "2.1.310 (Claude Code)"
+        "2.1.302 (Claude Code)" | "2.1.310 (Claude Code)" | "2.1.311 (Claude Code)"
     ) {
         return Err(invalid(
             "installed Claude version requires native import qualification; source retained",

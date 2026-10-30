@@ -1,6 +1,7 @@
 """Task-owned native API fixture used to observe actual outgoing model context.
 Never reads or changes the operator's credentials or provider configuration.
 """
+import datetime
 import http.server
 import json
 import threading
@@ -65,6 +66,14 @@ class NativeFixture:
         (pi_home/"settings.json").write_text(json.dumps({"defaultProvider":"openai","defaultModel":"gpt-4o","quietStartup":True}))
         (pi_home/"extensions").mkdir()
         shutil.copyfile(extension,pi_home/"extensions/herdr-agent-state.ts")
+        # Isolate native update notifications from the test: the task-owned
+        # session must never offer to update the operator's installed CLI.
+        codex_version = subprocess.check_output(['codex','--version'], text=True, timeout=10).strip().removeprefix('codex-cli ')
+        (codex_home/"version.json").write_text(json.dumps({
+            "latest_version":codex_version,
+            "last_checked_at":datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00','Z'),
+            "dismissed_version":None,
+        }))
         (codex_home/"config.toml").write_text(
             'model_provider="capture"\nmodel="fixture-model"\n[features]\nhooks=true\n[model_providers.capture]\nname="Task-owned local capture"\n'
             f'base_url="{self.url}/v1"\nwire_api="responses"\nrequires_openai_auth=false\nsupports_websockets=false\n')

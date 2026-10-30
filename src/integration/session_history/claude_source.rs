@@ -81,6 +81,19 @@ pub(crate) fn decode(bytes: Vec<u8>, expected_id: &str, cwd: &Path) -> io::Resul
                     return Err(invalid("unsupported native attachment; source retained"));
                 }
             }
+            "tools-used" => {
+                if row["sessionId"] != expected_id
+                    || !row["tools"]
+                        .as_array()
+                        .is_some_and(|tools| tools.iter().all(Value::is_string))
+                {
+                    return Err(invalid(
+                        "invalid native Claude tools-used metadata; source retained",
+                    ));
+                }
+                // The native record lists used tool names, not conversation content.
+                // The exact original record remains in the source archive.
+            }
             "api-request" | "api-request-shape" | "api-request-blob" => {}
             // Native metadata and UI diagnostics are archived but do not enter model context.
             "progress"
@@ -236,6 +249,40 @@ fn decode_message(message: &Value) -> io::Result<Vec<Value>> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn native_claude_tools_used_metadata_is_archived_without_affecting_model_context() {
+        let cwd = std::env::current_dir().unwrap();
+        let rows = [
+            json!({"type":"user","uuid":"u","parentUuid":null,"sessionId":"s","cwd":cwd,"message":{"role":"user","content":"retained"}}),
+            json!({"type":"tools-used","sessionId":"s","tools":["read"]}),
+        ];
+        let bytes = rows
+            .iter()
+            .map(|r| format!("{r}\n"))
+            .collect::<String>()
+            .into_bytes();
+        let history = decode(bytes.clone(), "s", &cwd).unwrap();
+        assert_eq!(history.source_bytes, bytes);
+        assert_eq!(history.messages.len(), 1);
+        assert!(serde_json::to_string(&history.messages)
+            .unwrap()
+            .contains("retained"));
+        let wrong = rows
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                if i == 1 {
+                    json!({"type":"tools-used","sessionId":"other","tools":["read"]})
+                } else {
+                    r.clone()
+                }
+            })
+            .map(|r| format!("{r}\n"))
+            .collect::<String>()
+            .into_bytes();
+        assert!(decode(wrong, "s", &cwd).is_err());
+    }
 
     #[test]
     fn native_roles_and_checkpoint_keep_post_compaction_messages_and_tools() {
