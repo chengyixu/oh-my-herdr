@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.9.12] - 2026-10-28
+## [0.9.12] - 2026-10-30
 
 ### Fixed
 - Pi sessions with interrupted historical tool calls can switch when the exact native active context is complete. Interrupted calls remain identifiable historical content, with original source records retained in the private archive; active unfinished calls and ambiguous historical records still refuse before source exit.
